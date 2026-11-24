@@ -27,9 +27,9 @@ logs/
 *.sqlite3
 
 # Build Artifacts & Dependencies
-bin/
-out/
-dist/
+/bin/
+/out/
+/dist/
 instabox-monitor
 instabox-monitor-*
 coverage.out
