@@ -59,7 +59,7 @@ type dailyFileWriter struct {
 }
 
 func newDailyFileWriter(dir string, nowFn func() time.Time) (*dailyFileWriter, error) {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create log dir %s: %w", dir, err)
 	}
 	w := &dailyFileWriter{
@@ -104,7 +104,7 @@ func (w *dailyFileWriter) rotateLocked(now time.Time) error {
 	}
 	dateStr := now.Format("2006-01-02")
 	path := filepath.Join(w.dir, fmt.Sprintf("log-%s.log", dateStr))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open daily log file %s: %w", path, err)
 	}
