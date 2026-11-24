@@ -50,12 +50,12 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 ## Phase 4 — Frontend Dashboard SPA (React + TypeScript + Tailwind + Recharts)
 **Branch:** `feat/phase-4-frontend-dashboard`
 
-- [ ] `TASK-4.1`: Setup proyek `web/` (React 19, TypeScript, Vite, Tailwind CSS v4, Recharts, Lucide, English UI).
-- [ ] `TASK-4.2`: API client, SSE hook, format helpers, `Layout`, `StateBadge`, `MetricBar`, `LoginPage`.
-- [ ] `TASK-4.3`: `FleetPage` & `LifecycleControls` — KPI summary, filter akun/org/state/search, `Wake All (N)`, **Card view mobile (`< 768px`)** & **Table view desktop/tablet (`>= 768px`)**, 1-klik Start/Resume, konfirmasi Pause/Stop (dengan opsi Force Stop), live operation tracker.
-- [ ] `TASK-4.4`: `VMDetailPage`, `MetricCharts`, `PortsPage`, `AccountsPage`, `AccountModal` (2 tab: `Single` | `Bulk Import` CSV/JSON/YAML + upload + preview + validasi opsional, badge `Auto-Disabled (401)` & `Key Error`).
-- [ ] `TASK-4.5`: Build & embed `web/dist` ke `internal/webui/dist` + verifikasi full-stack lokal.
-- [ ] **Merge Gate Phase 4**: `pnpm --dir web typecheck && pnpm --dir web build`, `go vet ./...`, `go test -v -race ./...`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
+- [x] `TASK-4.1`: Setup proyek `web/` (React 19, TypeScript, Vite, Tailwind CSS v4, Recharts, Lucide, English UI).
+- [x] `TASK-4.2`: API client, SSE hook, format helpers, `Layout`, `StateBadge`, `MetricBar`, `LoginPage`.
+- [x] `TASK-4.3`: `FleetPage` & `LifecycleControls` — KPI summary, filter akun/org/state/search, `Wake All (N)`, **Card view mobile (`< 768px`)** & **Table view desktop/tablet (`>= 768px`)**, 1-klik Start/Resume, konfirmasi Pause/Stop (dengan opsi Force Stop), live operation tracker.
+- [x] `TASK-4.4`: `VMDetailPage`, `MetricCharts`, `PortsPage`, `AccountsPage`, `AccountModal` (2 tab: `Single` | `Bulk Import` CSV/JSON/YAML + upload + preview + validasi opsional, badge `Auto-Disabled (401)` & `Key Error`).
+- [x] `TASK-4.5`: Build & embed `web/dist` ke `internal/webui/dist` + verifikasi full-stack lokal.
+- [x] **Merge Gate Phase 4**: `pnpm --dir web typecheck && pnpm --dir web build`, `go vet ./...`, `go test -v -race ./...`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
 
 ---
 

@@ -5,13 +5,23 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 3 — Background Poller, SSE Broker, Auth (`APP_PASSWORD`) & REST API (merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 4 — Frontend Dashboard SPA (React 19 + TypeScript + Tailwind v4 + Recharts) (merged ke `main`)
 - **Branch Aktif**: `main`
-- **Target Berikutnya**: Phase 4 (`feat/phase-4-frontend-dashboard`)
+- **Target Berikutnya**: Phase 5 (`build/phase-5-docker-ghcr-docs`)
 
 ---
 
 ## Riwayat Fase
+
+### Phase 4 — Frontend Dashboard SPA (React + TypeScript + Tailwind + Recharts)
+- **Branch**: `feat/phase-4-frontend-dashboard`
+- **Ringkasan Perubahan**:
+  - Setup proyek `web/` dengan React 19, TypeScript, Vite 6, Tailwind CSS v4, Recharts 3, Lucide icons, dan `pnpm-workspace.yaml` (`allowBuilds` untuk `esbuild` & `@tailwindcss/oxide`).
+  - `FleetPage` & `LifecycleControls`: KPI strip 4 metrik, filter multi-akun/org/state/search tersimpan di URL query params, tombol massal `Wake All (N)` mengikuti filter aktif, **daftar VM responsif dua mode** (Card view di mobile `< 768px` dengan tombol *touch-friendly* & Table sortable di tablet/desktop `>= 768px`), 1-klik Start/Resume, dialog konfirmasi Pause/Stop dengan checkbox eksplisit **Force Stop (`now=true`)**, tanpa Delete VM.
+  - `VMDetailPage` & `MetricCharts`: 5 tab (Metrics `15m`/`1h`/`6h`/`24h` untuk CPU/RAM/Network/Disk I/O/GPU, Disk & Storage, Processes, Serial Console Logs & 20 Operations, Ports & Metadata/Diagnostics) + live Operation Tracker via SSE.
+  - `PortsPage`, `AccountsPage`, `AccountModal`, `LoginPage`: agregasi Public Ports, manajemen akun lengkap dengan modal 2 tab (`Single` & `Bulk Import` CSV/JSON/YAML + file upload + preview + validasi `/v1/me` + laporan *partial success*), serta banner pemulihan cepat untuk `Auto-Disabled (401)` dan `Key Error`.
+- **Verifikasi**: `pnpm --dir web typecheck` (0 error), `pnpm --dir web build` (3.44s), `go vet ./...`, `go test -race ./...` (7/7 package PASS), dan single binary embedded SPA (`CGO_ENABLED=0`) berukuran 19 MB.
+- **Next Steps**: Multi-stage `Dockerfile` (`linux/amd64` & `linux/arm64`, distroless non-root), GitHub Actions Workflow GHCR (`ghcr.io/wawans/instabox-monitor`), `docker-compose.yml`, dan `docs/DEPLOYMENT_GUIDE.md` pada branch `build/phase-5-docker-ghcr-docs`.
 
 ### Phase 3 — Background Poller, SSE Broker, Auth (`APP_PASSWORD`) & REST API
 - **Branch**: `feat/phase-3-poller-sse-api`

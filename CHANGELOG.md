@@ -4,6 +4,11 @@ Semua perubahan penting pada proyek **InstaBox Monitor** dicatat dalam file ini 
 
 ## [Unreleased]
 
+### Phase 4 — Frontend Dashboard SPA (React + Tailwind v4 + Recharts)
+- Menambahkan SPA React 19 + TypeScript (English UI, default Dark Mode + toggle Light Mode) ter-embed ke binary Go.
+- Menambahkan halaman Fleet Overview dengan **Card view di mobile** & **Tabel sortable di tablet/desktop**, tombol lifecycle 1-klik Start/Resume, modal Pause/Stop (dengan opsi Force Stop), serta tombol massal `Wake All (N)` mengikuti filter aktif.
+- Menambahkan halaman VM Detail 5 tab (Metrics `15m`–`24h` CPU/RAM/Net/Disk I/O/GPU, Disk, Processes, Console Logs & Operations, Ports & Diagnostics), halaman Public Ports, halaman Login (`APP_PASSWORD`), serta halaman Accounts dengan modal **Single & Bulk Import** (CSV/JSON/YAML + upload) dan banner pemulihan `Auto-Disabled (401)` / `Key Error`.
+
 ### Phase 3 — Background Poller, SSE, Auth & Backend REST API
 - Menambahkan isolated per-account Background Poller dengan startup freshness check, tiered metrics polling, non-blocking `key_error`, auto-disable setelah *N* kali `401`, dan SSE broker (`/api/events`).
 - Menambahkan optional session auth (`APP_PASSWORD`/`APP_USERNAME`) dengan rate limiter login dan cookie `HttpOnly`.
