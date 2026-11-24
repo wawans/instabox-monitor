@@ -4,6 +4,11 @@ Semua perubahan penting pada proyek **InstaBox Monitor** dicatat dalam file ini 
 
 ## [Unreleased]
 
+### Phase 2 — InstaBox REST API Client
+- Menambahkan tipe data OpenAPI InstaBox lengkap (`internal/instabox/types.go`) dan structured `APIError`.
+- Menambahkan HTTP client `X-API-Key` (`internal/instabox/client.go`) dengan auto-pagination cursor, `Idempotency-Key`, Force Stop `?now=true`, dan long-poll `GetOperation`.
+- Menambahkan mock test suite lengkap berbasis `httptest.NewServer`.
+
 ### Phase 1 — Core Infrastructure, Conditional Logger, Crypto & SQLite Store
 - Menambahkan parser konfigurasi env (`APP_KEY`, `APP_PASSWORD`, `APP_ENV`, `POLL_INTERVAL_SECONDS`, `METRICS_POLL_INTERVAL_SECONDS`, `ACCOUNT_MAX_AUTH_FAILURES`, `ACCOUNTS_SEED_MODE`).
 - Menambahkan conditional daily file logger `logs/log-yyyy-mm-dd.log` (khusus `APP_ENV=DEBUG`, TZ-aware, auto-prune 7 hari).

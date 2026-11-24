@@ -29,10 +29,10 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 ## Phase 2 — InstaBox REST API Client
 **Branch:** `feat/phase-2-instabox-client`
 
-- [ ] `TASK-2.1`: `internal/instabox/types.go` — Struct lengkap sesuai OpenAPI `/v1/openapi.json`.
-- [ ] `TASK-2.2`: `internal/instabox/client.go` — HTTP client (`X-API-Key`, pagination `cursor`, `Idempotency-Key` UUID v4, Force Stop `?now=true`, long-poll `GetOperation`, parsing `APIError` `401`/`403`/`409`/`429`).
-- [ ] `TASK-2.3`: `internal/instabox/client_test.go` — Mock test suite (`httptest.NewServer`) mencakup semua endpoint & error path.
-- [ ] **Merge Gate Phase 2**: `go vet ./...`, `go test -v -race ./...`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
+- [x] `TASK-2.1`: `internal/instabox/types.go` — Struct lengkap sesuai OpenAPI `/v1/openapi.json`.
+- [x] `TASK-2.2`: `internal/instabox/client.go` — HTTP client (`X-API-Key`, pagination `cursor`, `Idempotency-Key` UUID v4, Force Stop `?now=true`, long-poll `GetOperation`, parsing `APIError` `401`/`403`/`409`/`429`).
+- [x] `TASK-2.3`: `internal/instabox/client_test.go` — Mock test suite (`httptest.NewServer`) mencakup semua endpoint & error path.
+- [x] **Merge Gate Phase 2**: `go vet ./...`, `go test -v -race ./...`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
 
 ---
 
