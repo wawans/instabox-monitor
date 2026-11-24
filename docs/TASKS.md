@@ -17,12 +17,12 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 ## Phase 1 — Core Infrastructure: Config, Conditional Logger, `APP_KEY` Crypto & SQLite Store
 **Branch:** `feat/phase-1-core-store-crypto-log`
 
-- [ ] `TASK-1.1`: `internal/config/config.go` & `config_test.go` — Parsing seluruh env vars (`PORT`, `APP_ENV`, `LOG_DIR`, `DATA_DIR`, `APP_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `POLL_INTERVAL_SECONDS`, `METRICS_POLL_INTERVAL_SECONDS`, `ACCOUNT_MAX_AUTH_FAILURES`, `INSTABOX_ACCOUNTS_JSON`, `INSTABOX_ACCOUNTS_FILE`, `ACCOUNTS_SEED_MODE`, `COOKIE_SECURE`).
-- [ ] `TASK-1.2`: `internal/logger/logger.go` & `logger_test.go` — Logger kondisional `slog` (`APP_ENV=DEBUG` menulis `logs/log-yyyy-mm-dd.log` mengikuti `TZ` + auto-prune 7 hari; `production` stdout saja tanpa file).
-- [ ] `TASK-1.3`: `internal/crypto/cipher.go` & `cipher_test.go` — Enkripsi AES-256-GCM (`APP_KEY` + fallback `.master.key`), `HashAPIKey` (`HMAC-SHA256`), dan `MaskAPIKey`.
-- [ ] `TASK-1.4`: `internal/store/` (`sqlite.go`, `accounts.go`, `snapshots.go`, `sessions.go`, `events.go`, `store_test.go`) — Pure-Go SQLite (`modernc.org/sqlite` WAL) dengan tabel `accounts`, `account_snapshots`, `sessions`, `activity_events`.
-- [ ] `TASK-1.5`: `internal/config/seed.go` & `seed_test.go` — Seeding hybrid (`ACCOUNTS_SEED_MODE=sync|bootstrap`), proteksi `source='ui'`, re-encrypt otomatis pada `key_error`, reset `auto_disabled` hanya bila `api_key_hash` berubah.
-- [ ] **Merge Gate Phase 1**: `go vet ./...`, `go test -v -race ./...`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
+- [x] `TASK-1.1`: `internal/config/config.go` & `config_test.go` — Parsing seluruh env vars (`PORT`, `APP_ENV`, `LOG_DIR`, `DATA_DIR`, `APP_KEY`, `APP_USERNAME`, `APP_PASSWORD`, `POLL_INTERVAL_SECONDS`, `METRICS_POLL_INTERVAL_SECONDS`, `ACCOUNT_MAX_AUTH_FAILURES`, `INSTABOX_ACCOUNTS_JSON`, `INSTABOX_ACCOUNTS_FILE`, `ACCOUNTS_SEED_MODE`, `COOKIE_SECURE`).
+- [x] `TASK-1.2`: `internal/logger/logger.go` & `logger_test.go` — Logger kondisional `slog` (`APP_ENV=DEBUG` menulis `logs/log-yyyy-mm-dd.log` mengikuti `TZ` + auto-prune 7 hari; `production` stdout saja tanpa file).
+- [x] `TASK-1.3`: `internal/crypto/cipher.go` & `cipher_test.go` — Enkripsi AES-256-GCM (`APP_KEY` + fallback `.master.key`), `HashAPIKey` (`HMAC-SHA256`), dan `MaskAPIKey`.
+- [x] `TASK-1.4`: `internal/store/` (`sqlite.go`, `accounts.go`, `snapshots.go`, `sessions.go`, `events.go`, `store_test.go`) — Pure-Go SQLite (`modernc.org/sqlite` WAL) dengan tabel `accounts`, `account_snapshots`, `sessions`, `activity_events`.
+- [x] `TASK-1.5`: `internal/config/seed.go` & `seed_test.go` — Seeding hybrid (`ACCOUNTS_SEED_MODE=sync|bootstrap`), proteksi `source='ui'`, re-encrypt otomatis pada `key_error`, reset `auto_disabled` hanya bila `api_key_hash` berubah.
+- [x] **Merge Gate Phase 1**: `go vet ./...`, `go test -v -race ./...`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
 
 ---
 

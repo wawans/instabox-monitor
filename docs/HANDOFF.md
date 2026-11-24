@@ -5,13 +5,25 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 0 — Bootstrap Repositori, `.gitignore` & Dokumen SDD (merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 1 — Core Infrastructure: Config, Conditional Logger, `APP_KEY` Crypto & SQLite Store (merged ke `main`)
 - **Branch Aktif**: `main`
-- **Target Berikutnya**: Phase 1 (`feat/phase-1-core-store-crypto-log`)
+- **Target Berikutnya**: Phase 2 (`feat/phase-2-instabox-client`)
 
 ---
 
 ## Riwayat Fase
+
+### Phase 1 — Core Infrastructure: Config, Conditional Logger, `APP_KEY` Crypto & SQLite Store
+- **Branch**: `feat/phase-1-core-store-crypto-log`
+- **Ringkasan Perubahan**:
+  - `internal/config/config.go`: parser seluruh env vars (`APP_KEY`, `APP_PASSWORD`, `APP_USERNAME`, `APP_ENV`, `POLL_INTERVAL_SECONDS`, `METRICS_POLL_INTERVAL_SECONDS`, `ACCOUNT_MAX_AUTH_FAILURES`, `ACCOUNTS_SEED_MODE`, dll.) dengan validasi & clamping aman.
+  - `internal/logger/logger.go`: logger `slog` kondisional yang hanya membuat & menulis `logs/log-yyyy-mm-dd.log` (mengikuti `TZ`, rotasi harian, auto-prune 7 hari) saat `APP_ENV=DEBUG`.
+  - `internal/crypto/cipher.go`: enkripsi AES-256-GCM (`APP_KEY` + fallback `.master.key` `0600`), `HashAPIKey` (`HMAC-SHA256`), dan `MaskAPIKey`.
+  - `internal/store/`: SQLite pure-Go (`modernc.org/sqlite` WAL) dengan tabel `accounts`, `account_snapshots`, `sessions`, dan `activity_events`.
+  - `internal/config/seed.go`: seeding hybrid ENV/YAML mendukung `sync` & `bootstrap`, proteksi penuh akun `source='ui'`, re-encrypt otomatis saat `APP_KEY` berubah di mode `sync`, serta menjaga status `auto_disabled` bila `apiKey` belum berubah.
+- **Catatan Teknis**: `modernc.org/sqlite v1.63.0` meng-upgrade `go.mod` ke `go 1.26.0` (akan disesuaikan pada `golang:1.26-alpine` di Phase 5).
+- **Verifikasi**: `go vet ./...` & `go test -v -race ./...` seluruhnya PASS (0 error).
+- **Next Steps**: Implementasi InstaBox REST API client (`internal/instabox/`) pada branch `feat/phase-2-instabox-client`.
 
 ### Phase 0 — Bootstrap Repositori, `.gitignore` & Dokumen SDD
 - **Branch**: `chore/phase-0-bootstrap-spec`
