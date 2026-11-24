@@ -5,13 +5,22 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 2 — InstaBox REST API Client (merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 3 — Background Poller, SSE Broker, Auth (`APP_PASSWORD`) & REST API (merged ke `main`)
 - **Branch Aktif**: `main`
-- **Target Berikutnya**: Phase 3 (`feat/phase-3-poller-sse-api`)
+- **Target Berikutnya**: Phase 4 (`feat/phase-4-frontend-dashboard`)
 
 ---
 
 ## Riwayat Fase
+
+### Phase 3 — Background Poller, SSE Broker, Auth (`APP_PASSWORD`) & REST API
+- **Branch**: `feat/phase-3-poller-sse-api`
+- **Ringkasan Perubahan**:
+  - `internal/poller/`: goroutine poller terisolasi per akun dengan `defer recover()`, startup freshness check (`account_snapshots`), tiered metrics polling (`METRICS_POLL_INTERVAL_SECONDS`), pemulihan `key_error` non-blocking, auto-disable otomatis setelah `ACCOUNT_MAX_AUTH_FAILURES` kali `401`, backoff `429`/`5xx`, operation long-poll tracker, dan SSE broker.
+  - `internal/api/`: optional session auth (`APP_PASSWORD`/`APP_USERNAME`, rate-limited login, `HttpOnly` cookie), CRUD akun Zero-Export, `POST /api/accounts/bulk` (*partial success* CSV/JSON/YAML + `api_key_hash` skip duplicates + validasi paralel `/v1/me`), `GET /api/fleet`, `POST /api/fleet/wake-all`, `GET /api/ports`, `GET /api/activity`, `GET /api/events` (SSE), serta detail VM & kontrol lifecycle adaptif (Force Stop `?now=true`, auto-detect `403 missing_scope`).
+  - `cmd/server/main.go` & `internal/webui/embed.go`: entrypoint binary dengan embedded `time/tzdata`, `-healthcheck` flag, graceful shutdown, dan embedded SPA handler.
+- **Verifikasi**: `go vet ./...`, `go test -v -race ./...` (seluruh 7 package PASS), dan `CGO_ENABLED=0 go build ./cmd/server` PASS.
+- **Next Steps**: Implementasi Frontend React 19 + TypeScript + Tailwind CSS v4 + Recharts SPA pada branch `feat/phase-4-frontend-dashboard`.
 
 ### Phase 2 — InstaBox REST API Client
 - **Branch**: `feat/phase-2-instabox-client`

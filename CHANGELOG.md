@@ -4,6 +4,11 @@ Semua perubahan penting pada proyek **InstaBox Monitor** dicatat dalam file ini 
 
 ## [Unreleased]
 
+### Phase 3 — Background Poller, SSE, Auth & Backend REST API
+- Menambahkan isolated per-account Background Poller dengan startup freshness check, tiered metrics polling, non-blocking `key_error`, auto-disable setelah *N* kali `401`, dan SSE broker (`/api/events`).
+- Menambahkan optional session auth (`APP_PASSWORD`/`APP_USERNAME`) dengan rate limiter login dan cookie `HttpOnly`.
+- Menambahkan REST API lengkap termasuk `POST /api/accounts/bulk` (*partial success*, `api_key_hash` duplicate skip), `POST /api/fleet/wake-all`, kontrol lifecycle adaptif + Force Stop, dan entrypoint `cmd/server` dengan `-healthcheck` & embedded `time/tzdata`.
+
 ### Phase 2 — InstaBox REST API Client
 - Menambahkan tipe data OpenAPI InstaBox lengkap (`internal/instabox/types.go`) dan structured `APIError`.
 - Menambahkan HTTP client `X-API-Key` (`internal/instabox/client.go`) dengan auto-pagination cursor, `Idempotency-Key`, Force Stop `?now=true`, dan long-poll `GetOperation`.
