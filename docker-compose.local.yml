@@ -1,0 +1,10 @@
+# Override untuk build langsung dari source lokal:
+# docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+services:
+  instabox-monitor:
+    image: instabox-monitor:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: local
