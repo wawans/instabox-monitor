@@ -39,11 +39,11 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 ## Phase 3 — Background Poller, SSE Broker, Auth (`APP_PASSWORD`) & REST API
 **Branch:** `feat/phase-3-poller-sse-api`
 
-- [ ] `TASK-3.1`: `internal/poller/` (`sse.go`, `manager.go`, `poller_test.go`) — Isolated per-account goroutine poller, startup freshness check, tiered metrics polling, non-blocking `key_error`, auto-disable setelah *N* kali `401`, backoff `429`/`5xx`, unit tests lengkap.
-- [ ] `TASK-3.2`: `internal/api/auth_handlers.go` — Optional session auth (`APP_PASSWORD`/`APP_USERNAME`), constant-time compare, login rate limiter, `HttpOnly` cookie.
-- [ ] `TASK-3.3`: `internal/api/` (`router.go`, `account_handlers.go`, `fleet_handlers.go`, `vm_handlers.go`) — Seluruh endpoint REST/SSE termasuk `POST /api/accounts/bulk` (*partial success*, `api_key_hash` skip duplicates) dan `POST /api/fleet/wake-all` (mengikuti filter aktif).
-- [ ] `TASK-3.4`: `cmd/server/main.go`, `internal/webui/embed.go`, `internal/api/api_test.go` — Entrypoint (`_ "time/tzdata"`, `-healthcheck`, graceful shutdown) + integration tests multi-akun.
-- [ ] **Merge Gate Phase 3**: `go vet ./...`, `go test -v -race ./...`, uji startup & `/api/health`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
+- [x] `TASK-3.1`: `internal/poller/` (`sse.go`, `manager.go`, `poller_test.go`) — Isolated per-account goroutine poller, startup freshness check, tiered metrics polling, non-blocking `key_error`, auto-disable setelah *N* kali `401`, backoff `429`/`5xx`, unit tests lengkap.
+- [x] `TASK-3.2`: `internal/api/auth_handlers.go` — Optional session auth (`APP_PASSWORD`/`APP_USERNAME`), constant-time compare, login rate limiter, `HttpOnly` cookie.
+- [x] `TASK-3.3`: `internal/api/` (`router.go`, `account_handlers.go`, `fleet_handlers.go`, `vm_handlers.go`) — Seluruh endpoint REST/SSE termasuk `POST /api/accounts/bulk` (*partial success*, `api_key_hash` skip duplicates) dan `POST /api/fleet/wake-all` (mengikuti filter aktif).
+- [x] `TASK-3.4`: `cmd/server/main.go`, `internal/webui/embed.go`, `internal/api/api_test.go` — Entrypoint (`_ "time/tzdata"`, `-healthcheck`, graceful shutdown) + integration tests multi-akun.
+- [x] **Merge Gate Phase 3**: `go vet ./...`, `go test -v -race ./...`, uji startup & `/api/health`, update Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
 
 ---
 
