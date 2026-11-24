@@ -5,13 +5,22 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 1 — Core Infrastructure: Config, Conditional Logger, `APP_KEY` Crypto & SQLite Store (merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 2 — InstaBox REST API Client (merged ke `main`)
 - **Branch Aktif**: `main`
-- **Target Berikutnya**: Phase 2 (`feat/phase-2-instabox-client`)
+- **Target Berikutnya**: Phase 3 (`feat/phase-3-poller-sse-api`)
 
 ---
 
 ## Riwayat Fase
+
+### Phase 2 — InstaBox REST API Client
+- **Branch**: `feat/phase-2-instabox-client`
+- **Ringkasan Perubahan**:
+  - `internal/instabox/types.go`: seluruh struct OpenAPI InstaBox (`Me`, `Org`, `Usage`, `Machine`, `MachineMetrics`, `MachineDisk`, `ProcessList`, `MachineLogs`, `Operation`, `PublicPortList`, `APIError` + helper `IsAuthError`, `IsMissingScope`, `IsRateLimited`, `IsOperationConflict`, `RetryAfter`).
+  - `internal/instabox/client.go`: client HTTP `X-API-Key` dengan cursor pagination otomatis pada `/v1/machines`, `Idempotency-Key` UUID v4 pada aksi lifecycle (`start`, `stop` + opsi Force Stop `?now=true`, `suspend`, `resume`; tanpa Delete VM), dan long-poll `GetOperation`.
+  - `internal/instabox/client_test.go`: mock test suite `httptest.NewServer` memverifikasi pagination, seluruh endpoint monitoring/lifecycle, Force Stop, dan error parsing (`401`/`403`/`429`).
+- **Verifikasi**: `go vet ./...` & `go test -v -race ./...` seluruhnya PASS (0 error).
+- **Next Steps**: Implementasi isolated per-account Background Poller, startup freshness check, tiered metrics polling, auto-disable `401`, SSE broker, optional auth (`APP_PASSWORD`), dan REST API backend pada branch `feat/phase-3-poller-sse-api`.
 
 ### Phase 1 — Core Infrastructure: Config, Conditional Logger, `APP_KEY` Crypto & SQLite Store
 - **Branch**: `feat/phase-1-core-store-crypto-log`
