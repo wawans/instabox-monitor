@@ -4,6 +4,13 @@ Semua perubahan penting pada proyek **InstaBox Monitor** dicatat dalam file ini 
 
 ## [Unreleased]
 
+### Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide
+- Menambahkan multi-stage `Dockerfile` (`linux/amd64` & `linux/arm64`, distroless non-root ~24.9 MB, built-in `-healthcheck`) dan `.dockerignore`.
+- Menambahkan GitHub Actions workflow `.github/workflows/docker-publish.yml` untuk test otomatis serta build & publish image multi-arch ke `ghcr.io/wawans/instabox-monitor`.
+- Menambahkan `docker-compose.yml` (GHCR), `docker-compose.local.yml`, `Makefile`, dan `scripts/build-multiarch.sh`.
+- Menambahkan panduan pengguna deployment GHCR lengkap di `docs/DEPLOYMENT_GUIDE.md` serta pembaruan final `README.md`.
+- Menyesuaikan permission file log debug ke `0644` agar mudah dibaca dari host saat bind-mount `/app/logs` di container distroless non-root.
+
 ### Phase 4 — Frontend Dashboard SPA (React + Tailwind v4 + Recharts)
 - Menambahkan SPA React 19 + TypeScript (English UI, default Dark Mode + toggle Light Mode) ter-embed ke binary Go.
 - Menambahkan halaman Fleet Overview dengan **Card view di mobile** & **Tabel sortable di tablet/desktop**, tombol lifecycle 1-klik Start/Resume, modal Pause/Stop (dengan opsi Force Stop), serta tombol massal `Wake All (N)` mengikuti filter aktif.

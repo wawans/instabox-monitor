@@ -62,8 +62,8 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 ## Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide
 **Branch:** `build/phase-5-docker-ghcr-docs`
 
-- [ ] `TASK-5.1`: `Dockerfile` (multi-stage, `CGO_ENABLED=0`, distroless non-root, `-healthcheck`) & `.dockerignore`.
-- [ ] `TASK-5.2`: `.github/workflows/docker-publish.yml` — Test + build & publish multi-arch (`linux/amd64`, `linux/arm64`) ke `ghcr.io/wawans/instabox-monitor`.
-- [ ] `TASK-5.3`: `docker-compose.yml` (GHCR image), `docker-compose.local.yml`, `Makefile`, `scripts/build-multiarch.sh`.
-- [ ] `TASK-5.4`: `docs/DEPLOYMENT_GUIDE.md` (Panduan Pengguna Deployment GHCR lengkap dalam Bahasa Indonesia) & pembaruan final `README.md`.
-- [ ] `TASK-5.5`: Validasi end-to-end (cross-compile `amd64`/`arm64`, Docker build, smoke test `production` vs `APP_ENV=DEBUG`, `buildx` multi-arch, audit keamanan Git), update final Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
+- [x] `TASK-5.1`: `Dockerfile` (multi-stage, `CGO_ENABLED=0`, distroless non-root, `-healthcheck`) & `.dockerignore`.
+- [x] `TASK-5.2`: `.github/workflows/docker-publish.yml` — Test + build & publish multi-arch (`linux/amd64`, `linux/arm64`) ke `ghcr.io/wawans/instabox-monitor`.
+- [x] `TASK-5.3`: `docker-compose.yml` (GHCR image), `docker-compose.local.yml`, `Makefile`, `scripts/build-multiarch.sh`.
+- [x] `TASK-5.4`: `docs/DEPLOYMENT_GUIDE.md` (Panduan Pengguna Deployment GHCR lengkap dalam Bahasa Indonesia) & pembaruan final `README.md`.
+- [x] `TASK-5.5`: Validasi end-to-end (cross-compile `amd64`/`arm64`, Docker build, smoke test `production` vs `APP_ENV=DEBUG`, `buildx` multi-arch, audit keamanan Git), update final Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
