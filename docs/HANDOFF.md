@@ -5,13 +5,32 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 4 — Frontend Dashboard SPA (React 19 + TypeScript + Tailwind v4 + Recharts) (merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide (SELESAI & merged ke `main`)
 - **Branch Aktif**: `main`
-- **Target Berikutnya**: Phase 5 (`build/phase-5-docker-ghcr-docs`)
+- **Status Proyek**: Siap rilis & push ke GitHub (`git@github.com:wawans/instabox-monitor.git`) untuk memicu pipeline otomatis GHCR (`ghcr.io/wawans/instabox-monitor`).
 
 ---
 
 ## Riwayat Fase
+
+### Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide
+- **Branch**: `build/phase-5-docker-ghcr-docs`
+- **Ringkasan Perubahan**:
+  - `Dockerfile` & `.dockerignore`: multi-stage build (`node:22-alpine` + `pnpm@12.15.0` → `golang:1.26-alpine` `CGO_ENABLED=0` cross-compile → `gcr.io/distroless/static-debian12:nonroot`, ukuran image final **24.9 MB**, built-in `HEALTHCHECK -healthcheck`, kepemilikan non-root UID `65532` pada `/data` & `/app/logs`).
+  - `internal/logger/logger.go`: penyesuaian permission file log debug ke `0644` (tertemukan saat container smoke test distroless agar operator host bisa membaca `./logs/log-yyyy-mm-dd.log` tanpa `sudo`).
+  - `.github/workflows/docker-publish.yml`: pipeline CI/CD penuh (Job `test` Go + Frontend → Job `build-and-publish` multi-arch `linux/amd64,linux/arm64` ke GHCR dengan kebijakan tagging `main` → `:latest`+`:sha-`, `v*.*.*` → semver+`:latest`, PR → build check tanpa push, `workflow_dispatch`).
+  - `docker-compose.yml` (GHCR `ghcr.io/wawans/instabox-monitor:latest`), `docker-compose.local.yml`, `Makefile`, dan `scripts/build-multiarch.sh`.
+  - `docs/DEPLOYMENT_GUIDE.md` & `README.md`: panduan pengguna lengkap deployment via Docker Image GHCR dalam Bahasa Indonesia (prasyarat `amd64`/`arm64`, GHCR login, `APP_KEY`, `APP_PASSWORD`, `APP_ENV=DEBUG`, reverse proxy SSE Nginx/Caddy, upgrade, backup/restore, troubleshooting).
+- **Verifikasi End-to-End**:
+  - `go vet ./...` & `go test -race ./...`: 7/7 package PASS (0 error, 0 race).
+  - `pnpm --dir web typecheck && pnpm --dir web build`: PASS (0 error).
+  - Cross-compile statis `linux/amd64` (13 MB) & `linux/arm64` (13 MB): PASS.
+  - Docker local build (`24.9 MB`) & container smoke test:
+    - Mode `production`: `/api/health` 200 OK, embedded SPA OK, `-healthcheck` exit 0, `0` file log dibuat.
+    - Mode `APP_ENV=DEBUG` + `TZ=Asia/Jakarta` + `APP_PASSWORD`: `/api/fleet` unauthenticated `401`, file `log-2026-11-24.log` tercipta (`0644`) dengan timestamp `+07:00`.
+  - Multi-arch `docker buildx build --platform linux/amd64,linux/arm64`: PASS (`MULTIARCH_BUILD_OK`).
+  - Audit keamanan Git: 0 file kredensial/sensitif/log/db ter-commit.
+- **Next Steps**: Push branch `main` ke remote GitHub `wawans/instabox-monitor` untuk menjalankan GitHub Actions publish pertama ke GHCR.
 
 ### Phase 4 — Frontend Dashboard SPA (React + TypeScript + Tailwind + Recharts)
 - **Branch**: `feat/phase-4-frontend-dashboard`

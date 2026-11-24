@@ -1,0 +1,38 @@
+services:
+  instabox-monitor:
+    image: ${IMAGE:-ghcr.io/wawans/instabox-monitor:latest}
+    container_name: instabox-monitor
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      APP_ENV: ${APP_ENV:-production}
+      TZ: ${TZ:-UTC}
+      DATA_DIR: /data
+      LOG_DIR: /app/logs
+      APP_KEY: ${APP_KEY:-}
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-15}
+      METRICS_POLL_INTERVAL_SECONDS: ${METRICS_POLL_INTERVAL_SECONDS:-30}
+      ACCOUNT_MAX_AUTH_FAILURES: ${ACCOUNT_MAX_AUTH_FAILURES:-3}
+      ACCOUNTS_SEED_MODE: ${ACCOUNTS_SEED_MODE:-sync}
+      INSTABOX_ACCOUNTS_JSON: ${INSTABOX_ACCOUNTS_JSON:-}
+      INSTABOX_ACCOUNTS_FILE: ${INSTABOX_ACCOUNTS_FILE:-}
+    volumes:
+      - instabox_monitor_data:/data
+      # Opsional: aktifkan bind mount logs saat menggunakan APP_ENV=DEBUG
+      # - ./logs:/app/logs
+      # Opsional: aktifkan jika memakai seeding dari file YAML/JSON (INSTABOX_ACCOUNTS_FILE=/config/accounts.yaml)
+      # - ./accounts.yaml:/config/accounts.yaml:ro
+    healthcheck:
+      test: ["CMD", "/app/instabox-monitor", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  instabox_monitor_data:
