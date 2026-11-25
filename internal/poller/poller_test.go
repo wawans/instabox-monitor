@@ -255,3 +255,97 @@ func TestPerAccountIsolationAutoDisable401AndNon401Resilience(t *testing.T) {
 		t.Fatalf("expected good account snapshot + live metrics, got %+v", snaps["acc-good"])
 	}
 }
+
+func TestPortCacheUpsertStripsTokenAndRemoveUpdatesSnapshot(t *testing.T) {
+	st, ciph := setupTestEnv(t)
+	ctx := context.Background()
+	createAcc(t, st, ciph, "acc-1", "Acct 1", "https://example.invalid", "ibk_1")
+
+	mgr := NewManager(config.Config{
+		PollIntervalSeconds:        10,
+		MetricsPollIntervalSeconds: 10,
+		AccountMaxAuthFailures:     3,
+	}, st, ciph, nil)
+
+	// Insert private port with secret Token and TokenURL.
+	mgr.UpsertCachedPort(ctx, "acc-1", instabox.PublicPort{
+		ID:        "port_3000",
+		MachineID: "m_1",
+		Name:      "web",
+		Port:      3000,
+		Protocol:  "http",
+		Access:    "private",
+		URL:       "https://3000-m1.instabox.sh",
+		Token:     "ibp_secret_should_never_persist",
+		TokenURL:  "https://3000-m1.instabox.sh?_token=ibp_secret_should_never_persist",
+	})
+
+	snap, ok := mgr.SnapshotCopy()["acc-1"]
+	if !ok || len(snap.Ports) != 1 {
+		t.Fatalf("expected 1 cached port, got ok=%v snap=%+v", ok, snap)
+	}
+	if snap.Ports[0].Token != "" || snap.Ports[0].TokenURL != "" {
+		t.Fatalf("expected Token and TokenURL stripped from memory cache, got %+v", snap.Ports[0])
+	}
+
+	dbSnaps, err := st.ListSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	var found bool
+	for _, s := range dbSnaps {
+		if s.AccountID != "acc-1" {
+			continue
+		}
+		found = true
+		var ports []instabox.PublicPort
+		if err := json.Unmarshal([]byte(s.PortsJSON), &ports); err != nil {
+			t.Fatalf("unmarshal PortsJSON: %v", err)
+		}
+		if len(ports) != 1 || ports[0].Port != 3000 || ports[0].Token != "" || ports[0].TokenURL != "" {
+			t.Fatalf("expected sanitized port in SQLite snapshot, got %+v (raw=%s)", ports, s.PortsJSON)
+		}
+	}
+	if !found {
+		t.Fatalf("expected snapshot row for acc-1")
+	}
+
+	// Update existing port and confirm upsert replaces in place without leaking new token.
+	mgr.UpsertCachedPort(ctx, "acc-1", instabox.PublicPort{
+		ID:        "port_3000",
+		MachineID: "m_1",
+		Name:      "web-public",
+		Port:      3000,
+		Protocol:  "http",
+		Access:    "public",
+		URL:       "https://3000-m1.instabox.sh",
+		Token:     "ibp_rotated_secret_should_not_leak",
+		TokenURL:  "https://3000-m1.instabox.sh?_token=ibp_rotated_secret_should_not_leak",
+	})
+	snap = mgr.SnapshotCopy()["acc-1"]
+	if len(snap.Ports) != 1 || snap.Ports[0].Name != "web-public" || snap.Ports[0].Access != "public" ||
+		snap.Ports[0].Token != "" || snap.Ports[0].TokenURL != "" {
+		t.Fatalf("expected updated sanitized port, got %+v", snap.Ports)
+	}
+
+	// Remove port and verify cache + SQLite snapshot reflect removal.
+	mgr.RemoveCachedPort(ctx, "acc-1", "m_1", 3000)
+	if len(mgr.SnapshotCopy()["acc-1"].Ports) != 0 {
+		t.Fatalf("expected 0 cached ports after remove, got %+v", mgr.SnapshotCopy()["acc-1"].Ports)
+	}
+	dbSnaps, err = st.ListSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("ListSnapshots after remove: %v", err)
+	}
+	for _, s := range dbSnaps {
+		if s.AccountID == "acc-1" {
+			var ports []instabox.PublicPort
+			if err := json.Unmarshal([]byte(s.PortsJSON), &ports); err != nil {
+				t.Fatalf("unmarshal PortsJSON after remove: %v", err)
+			}
+			if len(ports) != 0 {
+				t.Fatalf("expected 0 ports in SQLite after remove, got %+v", ports)
+			}
+		}
+	}
+}
