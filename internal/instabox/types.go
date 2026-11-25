@@ -361,7 +361,7 @@ type Operation struct {
 	ScheduledAt string    `json:"scheduledAt,omitempty"`
 }
 
-// PublicPortList mirrors GET /v1/ports.
+// PublicPortList mirrors GET /v1/ports and GET /v1/machines/{id}/ports.
 type PublicPortList struct {
 	Enabled bool         `json:"enabled"`
 	Ports   []PublicPort `json:"ports"`
@@ -376,7 +376,17 @@ type PublicPort struct {
 	Access    string  `json:"access"` // public | private
 	Address   string  `json:"address,omitempty"`
 	URL       string  `json:"url"`
+	Token     string  `json:"token,omitempty"`
 	TokenURL  string  `json:"tokenUrl,omitempty"`
 	CreatedAt string  `json:"createdAt,omitempty"`
 	ExpiresAt *string `json:"expiresAt,omitempty"`
+}
+
+// PublishPortRequest mirrors POST /v1/machines/{id}/ports.
+type PublishPortRequest struct {
+	Port        int    `json:"port"`
+	Name        string `json:"name,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+	Access      string `json:"access,omitempty"`
+	RotateToken bool   `json:"rotateToken,omitempty"`
 }
