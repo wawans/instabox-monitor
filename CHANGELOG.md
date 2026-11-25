@@ -4,6 +4,13 @@ Semua perubahan penting pada proyek **InstaBox Monitor** dicatat dalam file ini 
 
 ## [Unreleased]
 
+### Phase 6.1 — Ports Refinement, Fleet UI Polish, RFC 3339 Metrics & Account Sync Fixes
+- Memperbaiki jumlah `VMs` & `Running` yang tetap `0` pada halaman **Accounts** setelah sinkronisasi: menambahkan `GetOrg` (`GET /v1/orgs/{id}`) untuk limits/kuota, menggabungkan hitungan VM live (mencakup sandbox **free** dan **paid** serta `allocatedDiskGiB`) dari snapshot poller ke `GET /api/accounts`, `GET /api/fleet`, & `GET /api/accounts/.../vms/...`, mengubah `POST /api/accounts/{id}/sync` & `POST /api/fleet/sync` agar menunggu sinkronisasi selesai (`SyncAndWait`), serta menambahkan auto-refresh SSE (`fleetGeneratedAt`) dan animasi spinner Sync pada `AccountsPage`.
+- Memperbaiki error `since must be an RFC 3339 time` pada VM Detail Metrics dan background poller live telemetry melalui `instabox.NormalizeMetricsSince` (otomatis mengonversi `2m`/`15m`/`1h`/`6h`/`24h` ke timestamp RFC 3339 UTC dengan clamp maks `23h59m30s`) serta mereset error banner saat berpindah tab di VM Detail.
+- Menambahkan sinkronisasi cache port per-VM saat membuka tab Ports & Details (`ReplaceMachineCachedPorts`) sambil menjaga kebijakan Zero-Leak token dan menghindari broadcast SSE duplikat.
+- Meng-upgrade UX menu **Ports (`/ports`)** dan **VM Detail**: komponen `PortEndpoint` untuk TCP SNI (`openssl`/`psql` snippet tanpa broken link `tls://`), deteksi port duplikat & `maxLength=100` pada `PublishPortModal`, toggle `Show VMs with 0 ports`, quick 1-klik `Start VM`/`Wake VM` di sebelah badge `503`, toast feedback aksi port, kolom `Created`, serta sorting kolom tabel.
+- Menghilangkan `vm.orgName` (email personal org) dari tampilan daftar VM pada **Fleet (`/`)** (Mobile Card & Desktop Table) dengan tetap mempertahankan `vm.accountName` dan dropdown filter `All Orgs`.
+
 ### Phase 6 — Port Publishing & Management
 - Menambahkan dukungan publish, edit (`name`/`access`), rotasi token privat (`rotateToken`), dan unpublish port pada REST client InstaBox (`ListMachinePorts`, `PublishPort`, `UnpublishPort`).
 - Menambahkan `UpsertCachedPort` dan `RemoveCachedPort` pada `poller.Manager` dengan kebijakan **Zero-Leak**: `token` dan `tokenUrl` selalu dihapus dari memory cache, SQLite `account_snapshots`, `activity_events`, maupun seluruh endpoint `GET`.

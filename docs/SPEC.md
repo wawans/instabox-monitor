@@ -69,9 +69,9 @@ Dashboard terpusat untuk memantau dan mengelola VM (*sandboxes*) pada layanan [i
 ## 8. Pemetaan Endpoint InstaBox & Kontrak API Internal
 
 ### InstaBox REST API (`https://api.instabox.sh`)
-- `GET /v1/me`, `GET /v1/orgs`, `GET /v1/usage`
+- `GET /v1/me`, `GET /v1/orgs`, `GET /v1/orgs/{id}` (detail limits & usage org), `GET /v1/usage`
 - `GET /v1/machines` (auto cursor pagination), `GET /v1/machines/{id}`
-- `GET /v1/machines/{id}/metrics?since=...` (30s samples hingga 24h)
+- `GET /v1/machines/{id}/metrics?since=...` (30s samples hingga 24h; backend & poller otomatis menormalisasi durasi relatif seperti `2m`/`15m`/`1h`/`6h`/`24h` ke timestamp **RFC 3339** UTC dengan clamp maks `23h59m30s`)
 - `GET /v1/machines/{id}/disk`, `GET /v1/machines/{id}/processes`, `GET /v1/machines/{id}/logs?tail=...&after=...`
 - `GET /v1/ports`, `GET /v1/machines/{id}/ports`
 - `POST /v1/machines/{id}/ports` (create/update HTTP atau TCP port `1024..65535`, dukung `access: public|private` & `rotateToken: true`; port `5901`/`6768` reserved; max `16` port/VM)
@@ -93,10 +93,10 @@ Dashboard terpusat untuk memantau dan mengelola VM (*sandboxes*) pada layanan [i
 
 ## 9. Spesifikasi Web UI
 - Bahasa Inggris standar ops, Dark Mode default + toggle Light Mode.
-- **Fleet (`/`)**: KPI strip, chip akun + filter org/state/search, tombol **`Wake All (N)`** mengikuti filter aktif, **daftar VM responsif**: **Card view di mobile (`< 768px`)** dengan tombol *touch-friendly* dan **Table view sortable di tablet/desktop (`>= 768px`)**. Kontrol lifecycle 1-klik langsung untuk Start/Resume, modal konfirmasi untuk Pause/Stop (dengan checkbox eksplisit **Force Stop**), tanpa Delete VM.
-- **VM Detail (`/accounts/:accountId/vms/:machineId`)**: 5 tab (Metrics `15m`/`1h`/`6h`/`24h`, Disk & Storage, Processes, Console Logs & Operations, Ports & Details dengan manajemen publish/edit/rotate/unpublish & kuota `X/16`) + live Operation Tracker.
-- **Ports (`/ports`)**: manajemen penuh **Publish Port** (HTTP/TCP SNI, Public/Private + **One-Time Token Reveal modal**), **Edit** (`name`/`access`), **Rotate Token**, **Unpublish**, 4 kartu KPI, chip akun, filter tersimpan di URL, toggle **`List | Grouped by VM`**, serta **Card view di mobile** & **Table di desktop**.
-- **Accounts (`/accounts`)**: CRUD akun, modal **Add Account** 2 tab (**Single** | **Bulk Import** CSV/plain-text/JSON/YAML + file upload + preview + validasi opsional), kuota org, badge `Config`/`UI`, `Auto-Disabled (401)`, dan `Key Error`.
+- **Fleet (`/`)**: KPI strip, chip akun + filter org/state/search, tombol **`Wake All (N)`** mengikuti filter aktif, **daftar VM responsif**: **Card view di mobile (`< 768px`)** dengan tombol *touch-friendly* dan **Table view sortable di tablet/desktop (`>= 768px`)** (menampilkan nama VM, `vm.id`, dan `accountName` tanpa menampilkan `orgName` di daftar baris/kartu; dropdown filter `All Orgs` di toolbar tetap dipertahankan). Kontrol lifecycle 1-klik langsung untuk Start/Resume, modal konfirmasi untuk Pause/Stop (dengan checkbox eksplisit **Force Stop**), tanpa Delete VM.
+- **VM Detail (`/accounts/:accountId/vms/:machineId`)**: 5 tab (Metrics `15m`/`1h`/`6h`/`24h`, Disk & Storage, Processes, Console Logs & Operations, Ports & Details dengan manajemen publish/edit/rotate/unpublish, TCP SNI snippets, deteksi duplikat, & kuota `X/16`) + live Operation Tracker.
+- **Ports (`/ports`)**: manajemen penuh **Publish Port** (HTTP/TCP SNI, Public/Private + **One-Time Token Reveal modal**, deteksi port duplikat & `maxLength=100`), **Edit** (`name`/`access`), **Rotate Token**, **Unpublish**, 4 kartu KPI, chip akun, filter & toggle **`Show VMs with 0 ports`** tersimpan di URL, toggle **`List | Grouped by VM`**, quick 1-klik **`Start VM` / `Wake VM`** di samping indikator `503`, toast notifikasi singkat, snippet TCP **`openssl` / `psql`**, **Card view di mobile** & **Sortable Table di desktop** (termasuk kolom `Created`).
+- **Accounts (`/accounts`)**: CRUD akun, modal **Add Account** 2 tab (**Single** | **Bulk Import** CSV/plain-text/JSON/YAML + file upload + preview + validasi opsional), kuota org live (`VMs`, `Running` mencakup free+paid dari snapshot poller, `Disk GiB` dari `allocatedDiskGiB`, batas `maxMachines`/`freeSandboxes` dari `GET /v1/orgs/{id}`), tombol `Sync` sinkron (`SyncAndWait`) + auto-refresh SSE (`fleetGeneratedAt`), badge `Config`/`UI`, `Auto-Disabled (401)`, dan `Key Error`.
 - **Login (`/login`)**: tampil otomatis saat `APP_PASSWORD` aktif.
 
 ## 10. Spesifikasi Docker Multi-Arch & GHCR CI/CD

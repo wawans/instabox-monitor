@@ -78,3 +78,15 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 - [x] `TASK-6.3`: Internal REST API port management (`internal/api/port_handlers.go`, route `GET/POST/DELETE` di `router.go`, validasi `1024..65535`/reserved `5901`,`6768`/`tcp+private`/`rotateToken+public`, adaptif `403 missing_scope`, zero-leak policy) + `TestAppPortPublishRotateUnpublishAndZeroLeak`.
 - [x] `TASK-6.4`: Upgrade UI manajemen port di **Ports** (`/ports`), `PublishPortModal` (+ **One-Time Private Token Reveal** modal, Rotate Token, Unpublish, 4 KPI, `List | Grouped by VM`, URL filter, mobile cards & desktop table) dan **VM Detail** tab `Ports & Details`.
 - [x] `TASK-6.5`: Pembaruan dokumen (`SPEC.md`, `TASKS.md`, `HANDOFF.md`, `CHANGELOG.md`, `README.md`, `walkthrough.md`) + verifikasi Merge Gate Phase 6 & `--no-ff` merge ke `main`.
+
+---
+
+## Phase 6.1 — Ports Refinement, Fleet UI Polish & RFC 3339 Metrics Fix
+**Branch:** `feat/phase-6-ports-polish`
+
+- [x] `TASK-6.6`: Sinkronisasi live ports cache pada `poller.Manager.ReplaceMachineCachedPorts` & `handleListMachinePorts` (preserve VM lain, strip token, skip no-op SSE) + test poller/API.
+- [x] `TASK-6.7`: Komponen `PortEndpoint.tsx` (perbaikan TCP SNI `tls://`, tombol Copy SNI + snippet `openssl`/`psql`) & deteksi port duplikat + `maxLength=100` di `PublishPortModal.tsx`.
+- [x] `TASK-6.8`: Upgrade `PortsPage` (toggle `Show VMs with 0 ports`, 1-klik `Start VM`/`Wake VM` di samping `503`, toast aksi, `createdAt` + sortable table columns), `VMDetailPage` (`<PortEndpoint>`, reset error banner saat load tab, toast), `App.tsx` wiring, dan `FleetPage` (hilangkan `vm.orgName` dari mobile card & desktop table sembari mempertahankan dropdown `All Orgs`).
+- [x] `TASK-6.10`: Normalisasi query `since` ke timestamp **RFC 3339** UTC (`instabox.NormalizeMetricsSince`, clamp maks `23h59m30s`) untuk VM Detail (`/metrics`) dan poller live telemetry (`"2m"`), validasi `400 invalid_since`, plus unit/integration test.
+- [x] `TASK-6.11`: Sinkronisasi jumlah VM live per-org pada halaman Accounts (`GetOrg` `/v1/orgs/{id}`, `enrichAccountOrgsFromSnapshot` untuk free+paid VM & `allocatedDiskGiB`, blocking `SyncAndWait` pada `POST /api/accounts/{id}/sync` & `/api/fleet/sync`, auto-refresh SSE `fleetGeneratedAt` + spinner Sync di `AccountsPage`) + unit/integration tests.
+- [x] `TASK-6.9`: Pembaruan dokumen (`SPEC.md`, `TASKS.md`, `HANDOFF.md`, `CHANGELOG.md`, `walkthrough.md`) + verifikasi Merge Gate penuh & `--no-ff` merge ke `main`.
