@@ -436,3 +436,87 @@ func TestReplaceMachineCachedPortsPreservesOtherVMsAndStripsTokens(t *testing.T)
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestSyncAndWaitCompletesFreshPollAndEnrichesOrgDetails(t *testing.T) {
+	st, ciph := setupTestEnv(t)
+	ctx := context.Background()
+
+	var phase atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/machines":
+			if phase.Load() == 0 {
+				_ = json.NewEncoder(w).Encode(instabox.MachineList{Machines: []instabox.Machine{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_1", Name: "wans-1", OrgID: "org_free", State: "running", Free: true},
+					{ID: "m_2", Name: "wans-2", OrgID: "org_free", State: "suspended", Free: true},
+				},
+			})
+		case "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{})
+		case "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "0wan"})
+		case "/v1/orgs":
+			// Mirror real InstaBox behavior: GET /v1/orgs omits limits & usage.
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{
+				Orgs: []instabox.Org{{ID: "org_free", Name: "0wan", Tier: "free", Personal: true}},
+			})
+		case "/v1/orgs/org_free":
+			_ = json.NewEncoder(w).Encode(instabox.Org{
+				ID: "org_free", Name: "0wan", Tier: "free", Personal: true,
+				Limits: &instabox.OrgLimits{MaxMachines: 5, FreeSandboxes: 5},
+				Usage:  &instabox.OrgUsage{Machines: 2, FreeMachines: 2, Running: 0},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	createAcc(t, st, ciph, "acc-sync", "wans", srv.URL, "ibk_sync_test")
+
+	mgr := NewManager(config.Config{
+		PollIntervalSeconds:        300,
+		MetricsPollIntervalSeconds: 0,
+		AccountMaxAuthFailures:     3,
+	}, st, ciph, nil)
+	mgr.pollInterval = 5 * time.Minute
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Wait for initial cold-start poll (0 machines).
+	if err := mgr.SyncAndWait(ctx, "acc-sync"); err != nil {
+		t.Fatalf("initial SyncAndWait: %v", err)
+	}
+
+	// Switch upstream to return 2 machines and invoke SyncAndWait: cache must be updated IMMEDIATELY when it returns.
+	phase.Store(1)
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := mgr.SyncAndWait(waitCtx, "acc-sync"); err != nil {
+		t.Fatalf("SyncAndWait after upstream change: %v", err)
+	}
+
+	snap := mgr.SnapshotCopy()["acc-sync"]
+	if len(snap.Machines) != 2 {
+		t.Fatalf("expected 2 machines immediately after SyncAndWait, got %d", len(snap.Machines))
+	}
+
+	acc, err := st.GetAccount(ctx, "acc-sync")
+	if err != nil {
+		t.Fatalf("GetAccount: %v", err)
+	}
+	var orgs []instabox.Org
+	if err := json.Unmarshal([]byte(acc.OrgsJSON), &orgs); err != nil {
+		t.Fatalf("unmarshal OrgsJSON: %v", err)
+	}
+	if len(orgs) != 1 || orgs[0].Limits == nil || orgs[0].Limits.MaxMachines != 5 {
+		t.Fatalf("expected GetOrg limits persisted in OrgsJSON, got %+v", orgs)
+	}
+}

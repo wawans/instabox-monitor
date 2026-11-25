@@ -33,7 +33,9 @@ func (s *Server) handleGetVM(w http.ResponseWriter, r *http.Request) {
 	// Find ports for this machine from snapshot cache (or live fallback)
 	var vmPorts []instabox.PublicPort
 	snaps := s.poller.SnapshotCopy()
+	var snapPtr *poller.AccountCache
 	if snap, ok := snaps[accountID]; ok {
+		snapPtr = &snap
 		for _, p := range snap.Ports {
 			if p.MachineID == machineID {
 				vmPorts = append(vmPorts, p)
@@ -45,7 +47,7 @@ func (s *Server) handleGetVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account": s.toAccountResponse(acc),
+		"account": s.toAccountResponseWithSnapshot(acc, snapPtr),
 		"machine": vm,
 		"ports":   vmPorts,
 	})

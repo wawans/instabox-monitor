@@ -12,15 +12,22 @@ import { useSearchParams } from 'react-router-dom';
 import { AccountModal } from '../components/AccountModal';
 import { AccountStatusBadge } from '../components/StateBadge';
 import { api, ApiError } from '../lib/api';
-import { formatBytes, formatRelativeTime } from '../lib/format';
+import { formatRelativeTime } from '../lib/format';
 import type { Account, ActivityEvent } from '../types/instabox';
 
-export function AccountsPage({ onAccountsChanged }: { onAccountsChanged: () => Promise<void> }) {
+export function AccountsPage({
+  onAccountsChanged,
+  fleetGeneratedAt,
+}: {
+  onAccountsChanged: () => Promise<void>;
+  fleetGeneratedAt?: string;
+}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [seedMode, setSeedMode] = useState('sync');
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncingIds, setSyncingIds] = useState<Record<string, boolean>>({});
   const [modalOpen, setModalOpen] = useState(searchParams.get('add') === '1');
   const [editing, setEditing] = useState<Account | null>(null);
   const [deleting, setDeleting] = useState<Account | null>(null);
@@ -42,7 +49,7 @@ export function AccountsPage({ onAccountsChanged }: { onAccountsChanged: () => P
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, fleetGeneratedAt]);
 
   const handleSaved = async () => {
     await load();
@@ -50,11 +57,18 @@ export function AccountsPage({ onAccountsChanged }: { onAccountsChanged: () => P
   };
 
   const handleSync = async (acc: Account) => {
+    setSyncingIds((prev) => ({ ...prev, [acc.id]: true }));
     try {
       await api.syncAccount(acc.id);
-      setTimeout(() => void handleSaved(), 500);
+      await handleSaved();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Sync failed');
+    } finally {
+      setSyncingIds((prev) => {
+        const next = { ...prev };
+        delete next[acc.id];
+        return next;
+      });
     }
   };
 
@@ -233,18 +247,20 @@ export function AccountsPage({ onAccountsChanged }: { onAccountsChanged: () => P
                   <div className="mt-3 space-y-2 border-t border-slate-100 pt-3 dark:border-slate-800">
                     {acc.orgs.map((org) => {
                       const mUsed = org.usage?.machines ?? 0;
-                      const mMax = org.limits?.maxMachines ?? 0;
+                      const mMax = org.limits?.maxMachines || org.limits?.freeSandboxes || 0;
                       const rUsed = org.usage?.running ?? 0;
                       const rMax = org.limits?.maxRunning ?? 0;
-                      const sUsed = org.usage?.storedBytes ?? 0;
-                      const sMaxBytes = (org.limits?.maxStoredGiB ?? 0) * 1024 * 1024 * 1024;
+                      const diskGiB = org.usage?.allocatedDiskGiB ?? 0;
+                      const maxStoredGiB = org.limits?.maxStoredGiB ?? 0;
                       return (
                         <div key={org.id} className="rounded-lg bg-slate-50 p-2.5 text-[11px] dark:bg-slate-950/70">
                           <div className="flex items-center justify-between">
                             <span className="font-semibold">{org.name}</span>
-                            <span className="rounded bg-sky-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-sky-600 dark:text-sky-400">
-                              {org.tier}
-                            </span>
+                            {org.tier && (
+                              <span className="rounded bg-sky-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-sky-600 dark:text-sky-400">
+                                {org.tier}
+                              </span>
+                            )}
                           </div>
                           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-slate-600 dark:text-slate-400">
                             <span>
@@ -255,9 +271,9 @@ export function AccountsPage({ onAccountsChanged }: { onAccountsChanged: () => P
                               Running: {rUsed}
                               {rMax > 0 ? `/${rMax}` : ''}
                             </span>
-                            {sMaxBytes > 0 && (
+                            {(diskGiB > 0 || maxStoredGiB > 0) && (
                               <span>
-                                Storage: {formatBytes(sUsed ?? 0)} / {org.limits?.maxStoredGiB} GiB
+                                Disk: {diskGiB} GiB{maxStoredGiB > 0 ? ` / ${maxStoredGiB} GiB` : ''}
                               </span>
                             )}
                           </div>
@@ -280,12 +296,12 @@ export function AccountsPage({ onAccountsChanged }: { onAccountsChanged: () => P
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    disabled={!acc.enabled}
+                    disabled={!acc.enabled || Boolean(syncingIds[acc.id])}
                     onClick={() => handleSync(acc)}
                     className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium hover:bg-slate-100 disabled:opacity-40 dark:border-slate-700 dark:hover:bg-slate-800"
                   >
-                    <RefreshCw className="h-3 w-3" />
-                    Sync
+                    <RefreshCw className={`h-3 w-3 ${syncingIds[acc.id] ? 'animate-spin' : ''}`} />
+                    {syncingIds[acc.id] ? 'Syncing...' : 'Sync'}
                   </button>
                   <button
                     type="button"

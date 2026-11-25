@@ -60,6 +60,31 @@ type accountWorker struct {
 	cancel    context.CancelFunc
 	triggerCh chan struct{}
 	done      chan struct{}
+
+	waitMu  sync.Mutex
+	waiters []chan struct{}
+}
+
+func (w *accountWorker) addWaiter() chan struct{} {
+	ch := make(chan struct{})
+	w.waitMu.Lock()
+	w.waiters = append(w.waiters, ch)
+	w.waitMu.Unlock()
+	return ch
+}
+
+func (w *accountWorker) takeWaiters() []chan struct{} {
+	w.waitMu.Lock()
+	out := w.waiters
+	w.waiters = nil
+	w.waitMu.Unlock()
+	return out
+}
+
+func closeWaiters(waiters []chan struct{}) {
+	for _, ch := range waiters {
+		close(ch)
+	}
 }
 
 // Manager coordinates isolated per-account background pollers, SQLite snapshot persistence,
@@ -197,6 +222,44 @@ func (m *Manager) SyncNow(accountID string) {
 		default:
 		}
 	}
+}
+
+// SyncAndWait triggers an immediate forced poll for one account (or all running workers if accountID == "")
+// and waits until the triggered poll cycle(s) complete or ctx is cancelled.
+func (m *Manager) SyncAndWait(ctx context.Context, accountID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.mu.RLock()
+	var waitChs []chan struct{}
+	if accountID != "" {
+		if w, ok := m.workers[accountID]; ok {
+			waitChs = append(waitChs, w.addWaiter())
+			select {
+			case w.triggerCh <- struct{}{}:
+			default:
+			}
+		}
+	} else {
+		for _, w := range m.workers {
+			waitChs = append(waitChs, w.addWaiter())
+			select {
+			case w.triggerCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, ch := range waitChs {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // SnapshotCopy returns a safe copy of all cached account snapshots.
@@ -570,7 +633,12 @@ func (m *Manager) stopWorker(accountID string) {
 }
 
 func (m *Manager) runAccountLoop(ctx context.Context, w *accountWorker, accountID string, client *instabox.Client, initialDelay time.Duration) {
-	defer close(w.done)
+	var inFlightWaiters []chan struct{}
+	defer func() {
+		closeWaiters(inFlightWaiters)
+		closeWaiters(w.takeWaiters())
+		close(w.done)
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			m.log.Error("isolated account poller recovered from panic", "accountId", accountID, "panic", r)
@@ -597,11 +665,20 @@ func (m *Manager) runAccountLoop(ctx context.Context, w *accountWorker, accountI
 			select {
 			case <-ctx.Done():
 				return
+			case <-w.triggerCh:
+				forced = true
 			default:
 			}
 		}
 
+		inFlightWaiters = w.takeWaiters()
+		if len(inFlightWaiters) > 0 {
+			forced = true
+		}
+
 		delay, stopWorker := m.pollOnce(ctx, accountID, client, forced, &transientStreak)
+		closeWaiters(inFlightWaiters)
+		inFlightWaiters = nil
 		if stopWorker {
 			m.mu.Lock()
 			if cur, ok := m.workers[accountID]; ok && cur == w {
@@ -657,6 +734,14 @@ func (m *Manager) pollOnce(ctx context.Context, accountID string, client *instab
 			userEmail = me.Email
 		}
 		if orgs, orgErr := client.ListOrgs(ctx); orgErr == nil {
+			for i := range orgs {
+				if orgs[i].ID == "" {
+					continue
+				}
+				if detailed, dErr := client.GetOrg(ctx, orgs[i].ID); dErr == nil && detailed.ID != "" {
+					orgs[i] = detailed
+				}
+			}
 			if b, jErr := json.Marshal(orgs); jErr == nil {
 				orgsJSON = string(b)
 			}

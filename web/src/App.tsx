@@ -163,7 +163,10 @@ export default function App() {
               />
             }
           />
-          <Route path="/accounts" element={<AccountsPage onAccountsChanged={loadFleet} />} />
+          <Route
+            path="/accounts"
+            element={<AccountsPage onAccountsChanged={loadFleet} fleetGeneratedAt={fleet?.generatedAt} />}
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

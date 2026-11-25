@@ -125,6 +125,7 @@ type Org struct {
 
 type OrgLimits struct {
 	AlwaysOn          bool     `json:"alwaysOn"`
+	FreeSandboxes     int      `json:"freeSandboxes,omitempty"`
 	MaxDiskGiB        int      `json:"maxDiskGiB"`
 	MaxMachines       int      `json:"maxMachines"`
 	MaxMembers        int      `json:"maxMembers"`
@@ -140,6 +141,7 @@ type OrgLimits struct {
 type OrgUsage struct {
 	AllocatedDiskGiB  int     `json:"allocatedDiskGiB"`
 	Machines          int     `json:"machines"`
+	FreeMachines      int     `json:"freeMachines,omitempty"`
 	Running           int     `json:"running"`
 	Snapshots         int     `json:"snapshots"`
 	StoredBytes       *int64  `json:"storedBytes,omitempty"`

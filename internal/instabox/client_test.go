@@ -28,6 +28,12 @@ func TestClientMonitoringAndPagination(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Me{UserID: 1, Login: "wawans", Email: "w@example.com"})
 		case "/v1/orgs":
 			_ = json.NewEncoder(w).Encode(OrgList{Orgs: []Org{{ID: "org_1", Name: "Prod", Tier: "pro"}}})
+		case "/v1/orgs/org_1":
+			_ = json.NewEncoder(w).Encode(Org{
+				ID: "org_1", Name: "Prod", Tier: "pro",
+				Limits: &OrgLimits{MaxMachines: 10, FreeSandboxes: 5, MaxRunning: 5, MaxStoredGiB: 200},
+				Usage:  &OrgUsage{Machines: 3, FreeMachines: 1, Running: 2, AllocatedDiskGiB: 60},
+			})
 		case "/v1/machines":
 			cur := r.URL.Query().Get("cursor")
 			if cur == "" {
@@ -92,6 +98,10 @@ func TestClientMonitoringAndPagination(t *testing.T) {
 	orgs, err := c.ListOrgs(ctx)
 	if err != nil || len(orgs) != 1 || orgs[0].Tier != "pro" {
 		t.Fatalf("ListOrgs = (%+v, %v)", orgs, err)
+	}
+	orgDetail, err := c.GetOrg(ctx, "org_1")
+	if err != nil || orgDetail.Limits == nil || orgDetail.Limits.MaxMachines != 10 || orgDetail.Usage == nil || orgDetail.Usage.AllocatedDiskGiB != 60 {
+		t.Fatalf("GetOrg = (%+v, %v)", orgDetail, err)
 	}
 	machines, err := c.ListMachines(ctx)
 	if err != nil || len(machines) != 2 || machines[0].ID != "m_1" || machines[1].ID != "m_2" {

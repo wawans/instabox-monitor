@@ -60,6 +60,13 @@ func (c *Client) ListOrgs(ctx context.Context) ([]Org, error) {
 	return out.Orgs, err
 }
 
+// GetOrg calls GET /v1/orgs/{id} to fetch full org limits and usage.
+func (c *Client) GetOrg(ctx context.Context, id string) (Org, error) {
+	var out Org
+	err := c.doJSON(ctx, c.httpClient, http.MethodGet, "/v1/orgs/"+url.PathEscape(id), nil, nil, &out)
+	return out, err
+}
+
 // GetUsage calls GET /v1/usage (optionally scoped to orgID).
 func (c *Client) GetUsage(ctx context.Context, orgID string) (Usage, error) {
 	path := "/v1/usage"

@@ -680,3 +680,90 @@ func TestGetVMMetricsNormalizesSinceToRFC3339AndRejectsInvalid(t *testing.T) {
 		t.Fatalf("expected 1 upstream hit total, got %d", upstreamHits.Load())
 	}
 }
+
+func TestSyncAccountBlocksUntilDoneAndEnrichesFreeOrgVMCounts(t *testing.T) {
+	var phase atomic.Int32
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "0wan"})
+		case "/v1/orgs":
+			// Real InstaBox /v1/orgs omits usage & limits.
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{
+				Orgs: []instabox.Org{{ID: "org_0wan", Name: "0wan", Tier: "free", Personal: true}},
+			})
+		case "/v1/orgs/org_0wan":
+			// Real InstaBox /v1/orgs/{id} reports usage.running=0 for FREE sandboxes!
+			_ = json.NewEncoder(w).Encode(instabox.Org{
+				ID: "org_0wan", Name: "0wan", Tier: "free", Personal: true,
+				Limits: &instabox.OrgLimits{MaxMachines: 5, FreeSandboxes: 5},
+				Usage:  &instabox.OrgUsage{Machines: 5, FreeMachines: 5, Running: 0},
+			})
+		case "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{})
+		case "/v1/machines":
+			if phase.Load() == 0 {
+				_ = json.NewEncoder(w).Encode(instabox.MachineList{Machines: []instabox.Machine{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_1", Name: "wans-1", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_2", Name: "wans-2", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_3", Name: "wans-3", OrgID: "org_0wan", State: "running", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_4", Name: "wans-4", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_5", Name: "wans-5", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, pm, ciph := newTestServer(t, "")
+	ctx := context.Background()
+	enc, _ := ciph.Encrypt("ibk_0wan_sync")
+	acc, _ := st.CreateAccount(ctx, store.Account{
+		ID: "acc-0wan", Name: "wans", BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey("ibk_0wan_sync"),
+		KeyHint: "ibk_••••sync", Enabled: true, Source: store.SourceUI,
+	})
+	pm.ReconcileAccount(ctx, acc.ID)
+
+	// Wait for initial sync (0 VMs), then flip upstream to 5 VMs (1 running free VM).
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-0wan/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial POST sync = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	phase.Store(1)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-0wan/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST sync = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Immediately query GET /api/accounts with NO sleep: must already reflect 5 VMs, 1 running, 100 GiB disk, max 5!
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/accounts = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Accounts []accountResponse `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode /api/accounts: %v", err)
+	}
+	if len(resp.Accounts) != 1 || len(resp.Accounts[0].Orgs) != 1 {
+		t.Fatalf("expected 1 account with 1 org, got %+v", resp.Accounts)
+	}
+	org := resp.Accounts[0].Orgs[0]
+	if org.Usage == nil || org.Usage.Machines != 5 || org.Usage.Running != 1 || org.Usage.AllocatedDiskGiB != 100 {
+		t.Fatalf("expected live org usage machines=5 running=1 disk=100, got %+v", org.Usage)
+	}
+	if org.Limits == nil || org.Limits.MaxMachines != 5 {
+		t.Fatalf("expected org limits maxMachines=5, got %+v", org.Limits)
+	}
+}
