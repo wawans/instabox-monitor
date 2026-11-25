@@ -629,3 +629,54 @@ func TestGetMachinePortsSyncsGlobalPortsCache(t *testing.T) {
 		t.Fatalf("expected 2 ports (db:4000 preserved + cli-prom:9090 synced), got %+v", portsResp.Ports)
 	}
 }
+
+func TestGetVMMetricsNormalizesSinceToRFC3339AndRejectsInvalid(t *testing.T) {
+	var upstreamHits atomic.Int32
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines/m_run/metrics":
+			upstreamHits.Add(1)
+			sinceQ := r.URL.Query().Get("since")
+			parsed, err := time.Parse(time.RFC3339, sinceQ)
+			if err != nil {
+				t.Errorf("upstream expected RFC 3339 since, got %q: %v", sinceQ, err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if ago := time.Since(parsed); ago < 59*time.Minute || ago > 61*time.Minute {
+				t.Errorf("upstream expected since ~1h ago, got %s (ago=%v)", sinceQ, ago)
+			}
+			_ = json.NewEncoder(w).Encode(instabox.MachineMetrics{
+				Metrics: []instabox.MachineMetric{{Timestamp: time.Now().UTC().Format(time.RFC3339), CPUUsedPct: 42}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, _, ciph := newTestServer(t, "")
+	ctx := context.Background()
+	enc, _ := ciph.Encrypt("ibk_rw_metrics")
+	_, _ = st.CreateAccount(ctx, store.Account{
+		ID: "acc-rw", Name: "Alpha", BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey("ibk_rw_metrics"),
+		KeyHint: "ibk_••••rics", Enabled: true, Source: store.SourceUI,
+	})
+
+	// 1. Valid duration query (?since=1h) normalizes to RFC 3339 before reaching InstaBox.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/acc-rw/vms/m_run/metrics?since=1h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET metrics?since=1h = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. Invalid since query returns 400 invalid_since locally without hitting upstream.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/acc-rw/vms/m_run/metrics?since=notaduration", nil))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_since") {
+		t.Fatalf("GET metrics?since=notaduration = %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("expected 1 upstream hit total, got %d", upstreamHits.Load())
+	}
+}

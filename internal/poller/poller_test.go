@@ -177,6 +177,12 @@ func TestPerAccountIsolationAutoDisable401AndNon401Resilience(t *testing.T) {
 		case "/v1/orgs":
 			_ = json.NewEncoder(w).Encode(instabox.OrgList{})
 		case "/v1/machines/m_ok/metrics":
+			sinceQ := r.URL.Query().Get("since")
+			if parsed, parseErr := time.Parse(time.RFC3339, sinceQ); parseErr != nil {
+				t.Errorf("expected RFC 3339 since timestamp from poller, got %q: %v", sinceQ, parseErr)
+			} else if ago := time.Since(parsed); ago < time.Minute || ago > 5*time.Minute {
+				t.Errorf("expected poller since ~2m ago, got %s (ago=%v)", sinceQ, ago)
+			}
 			_ = json.NewEncoder(w).Encode(instabox.MachineMetrics{
 				Metrics: []instabox.MachineMetric{{Timestamp: "2026-11-24T10:00:00Z", CPUUsedPct: 25, MemUsed: 512, MemTotal: 1024}},
 			})
