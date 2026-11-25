@@ -73,7 +73,9 @@ Dashboard terpusat untuk memantau dan mengelola VM (*sandboxes*) pada layanan [i
 - `GET /v1/machines` (auto cursor pagination), `GET /v1/machines/{id}`
 - `GET /v1/machines/{id}/metrics?since=...` (30s samples hingga 24h)
 - `GET /v1/machines/{id}/disk`, `GET /v1/machines/{id}/processes`, `GET /v1/machines/{id}/logs?tail=...&after=...`
-- `GET /v1/ports`
+- `GET /v1/ports`, `GET /v1/machines/{id}/ports`
+- `POST /v1/machines/{id}/ports` (create/update HTTP atau TCP port `1024..65535`, dukung `access: public|private` & `rotateToken: true`; port `5901`/`6768` reserved; max `16` port/VM)
+- `DELETE /v1/machines/{id}/ports/{port}` (`204 No Content`)
 - `POST /v1/machines/{id}/{start|stop|suspend|resume}` (wajib `Idempotency-Key`; `stop` mendukung `?now=true` untuk Force Stop; **Delete VM dikecualikan**)
 - `GET /v1/operations/{id}?wait=25`
 
@@ -81,16 +83,19 @@ Dashboard terpusat untuk memantau dan mengelola VM (*sandboxes*) pada layanan [i
 - `GET /api/health` (publik)
 - `GET /api/auth/status`, `POST /api/auth/login`, `POST /api/auth/logout`
 - `GET /api/accounts`, `POST /api/accounts`, `POST /api/accounts/bulk` (*partial success*, `api_key_hash` skip duplicates, validasi `/v1/me` opsional), `POST /api/accounts/test`, `PATCH /api/accounts/{id}`, `DELETE /api/accounts/{id}`, `POST /api/accounts/{id}/sync`
-- `GET /api/fleet`, `POST /api/fleet/wake-all` (mengikuti filter aktif, tanpa Pause/Stop All), `GET /api/ports`, `GET /api/activity`, `GET /api/events` (SSE)
+- `GET /api/fleet`, `POST /api/fleet/wake-all` (mengikuti filter aktif, tanpa Pause/Stop All), `GET /api/ports` (enriched + secret-stripped), `GET /api/activity`, `GET /api/events` (SSE)
 - `GET /api/accounts/{accountId}/vms/{machineId}/{metrics,disk,processes,logs}`
+- `GET /api/accounts/{accountId}/vms/{machineId}/ports` (live port list, secret-stripped)
+- `POST /api/accounts/{accountId}/vms/{machineId}/ports` (publish/edit/rotate; `token` & `tokenUrl` dikembalikan **one-time hanya di response HTTP `POST` ini**, tidak pernah disimpan di memory cache, SQLite `account_snapshots`, `activity_events`, maupun response `GET`)
+- `DELETE /api/accounts/{accountId}/vms/{machineId}/ports/{port}`
 - `POST /api/accounts/{accountId}/vms/{machineId}/actions/{start|stop|suspend|resume}` (body opsional `{"force": true}` untuk `stop`)
 - `GET /api/accounts/{accountId}/operations/{opId}`
 
 ## 9. Spesifikasi Web UI
 - Bahasa Inggris standar ops, Dark Mode default + toggle Light Mode.
 - **Fleet (`/`)**: KPI strip, chip akun + filter org/state/search, tombol **`Wake All (N)`** mengikuti filter aktif, **daftar VM responsif**: **Card view di mobile (`< 768px`)** dengan tombol *touch-friendly* dan **Table view sortable di tablet/desktop (`>= 768px`)**. Kontrol lifecycle 1-klik langsung untuk Start/Resume, modal konfirmasi untuk Pause/Stop (dengan checkbox eksplisit **Force Stop**), tanpa Delete VM.
-- **VM Detail (`/accounts/:accountId/vms/:machineId`)**: 5 tab (Metrics `15m`/`1h`/`6h`/`24h`, Disk & Storage, Processes, Console Logs & Operations, Ports & Details) + live Operation Tracker.
-- **Ports (`/ports`)**: agregasi public/private ports lintas akun.
+- **VM Detail (`/accounts/:accountId/vms/:machineId`)**: 5 tab (Metrics `15m`/`1h`/`6h`/`24h`, Disk & Storage, Processes, Console Logs & Operations, Ports & Details dengan manajemen publish/edit/rotate/unpublish & kuota `X/16`) + live Operation Tracker.
+- **Ports (`/ports`)**: manajemen penuh **Publish Port** (HTTP/TCP SNI, Public/Private + **One-Time Token Reveal modal**), **Edit** (`name`/`access`), **Rotate Token**, **Unpublish**, 4 kartu KPI, chip akun, filter tersimpan di URL, toggle **`List | Grouped by VM`**, serta **Card view di mobile** & **Table di desktop**.
 - **Accounts (`/accounts`)**: CRUD akun, modal **Add Account** 2 tab (**Single** | **Bulk Import** CSV/plain-text/JSON/YAML + file upload + preview + validasi opsional), kuota org, badge `Config`/`UI`, `Auto-Disabled (401)`, dan `Key Error`.
 - **Login (`/login`)**: tampil otomatis saat `APP_PASSWORD` aktif.
 

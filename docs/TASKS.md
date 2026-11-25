@@ -67,3 +67,14 @@ Setiap fase dikerjakan pada **Git branch terpisah** dan di-merge ke `main` (`--n
 - [x] `TASK-5.3`: `docker-compose.yml` (GHCR image), `docker-compose.local.yml`, `Makefile`, `scripts/build-multiarch.sh`.
 - [x] `TASK-5.4`: `docs/DEPLOYMENT_GUIDE.md` (Panduan Pengguna Deployment GHCR lengkap dalam Bahasa Indonesia) & pembaruan final `README.md`.
 - [x] `TASK-5.5`: Validasi end-to-end (cross-compile `amd64`/`arm64`, Docker build, smoke test `production` vs `APP_ENV=DEBUG`, `buildx` multi-arch, audit keamanan Git), update final Handoff/Tasks/Changelog, merge `--no-ff` ke `main`.
+
+---
+
+## Phase 6 — Port Publishing & Management
+**Branch:** `feat/phase-6-port-publishing`
+
+- [x] `TASK-6.1`: Client & tipe port publishing (`PublishPortRequest`, `PublicPort.Token`, `ListMachinePorts`, `PublishPort`, `UnpublishPort`) + unit test `TestClientPortPublishingAndUnpublish`.
+- [x] `TASK-6.2`: Poller port cache helpers (`SanitizePublicPort`, `UpsertCachedPort`, `RemoveCachedPort`, sanitasi defensif di `pollOnce` & `decodeSnapshot`) + `TestPortCacheUpsertStripsTokenAndRemoveUpdatesSnapshot`.
+- [x] `TASK-6.3`: Internal REST API port management (`internal/api/port_handlers.go`, route `GET/POST/DELETE` di `router.go`, validasi `1024..65535`/reserved `5901`,`6768`/`tcp+private`/`rotateToken+public`, adaptif `403 missing_scope`, zero-leak policy) + `TestAppPortPublishRotateUnpublishAndZeroLeak`.
+- [x] `TASK-6.4`: Upgrade UI manajemen port di **Ports** (`/ports`), `PublishPortModal` (+ **One-Time Private Token Reveal** modal, Rotate Token, Unpublish, 4 KPI, `List | Grouped by VM`, URL filter, mobile cards & desktop table) dan **VM Detail** tab `Ports & Details`.
+- [x] `TASK-6.5`: Pembaruan dokumen (`SPEC.md`, `TASKS.md`, `HANDOFF.md`, `CHANGELOG.md`, `README.md`, `walkthrough.md`) + verifikasi Merge Gate Phase 6 & `--no-ff` merge ke `main`.

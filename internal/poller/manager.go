@@ -810,6 +810,7 @@ func decodeSnapshot(s store.AccountSnapshot) *AccountCache {
 	}
 	_ = json.Unmarshal([]byte(s.MachinesJSON), &c.Machines)
 	_ = json.Unmarshal([]byte(s.PortsJSON), &c.Ports)
+	c.Ports = sanitizePublicPorts(c.Ports)
 	_ = json.Unmarshal([]byte(s.MetricsJSON), &c.LiveMetrics)
 	if c.LiveMetrics == nil {
 		c.LiveMetrics = make(map[string]VMLiveTelemetry)
