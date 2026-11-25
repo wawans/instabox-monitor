@@ -1,14 +1,14 @@
 import {
-  AlertTriangle,
-  Check,
-  Copy,
-  ExternalLink,
+  ArrowUpDown,
+  CheckCircle2,
   Globe,
   KeyRound,
   Layers,
   List,
+  Loader2,
   Lock,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -16,9 +16,11 @@ import {
   ShieldCheck,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { PortEndpoint } from '../components/PortEndpoint';
 import {
   type PortModalTarget,
   PublishPortModal,
@@ -28,9 +30,11 @@ import {
 } from '../components/PublishPortModal';
 import { VMStateBadge } from '../components/StateBadge';
 import { api, ApiError } from '../lib/api';
-import type { FleetResponse, PublicPort } from '../types/instabox';
+import { formatRelativeTime } from '../lib/format';
+import type { FleetResponse, Operation, PublicPort } from '../types/instabox';
 
 type ViewMode = 'list' | 'grouped';
+type SortField = 'account' | 'vm' | 'port' | 'protocol' | 'access' | 'created';
 
 interface PortGroup {
   key: string;
@@ -46,16 +50,25 @@ interface PortGroup {
 
 export function PortsPage({
   fleet,
+  activeOps = {},
+  onOperationStarted,
   onFleetRefresh,
 }: {
   fleet?: FleetResponse | null;
+  activeOps?: Record<string, Operation>;
+  onOperationStarted?: (accountId: string, machineId: string, op: Operation) => void;
   onFleetRefresh?: () => Promise<void> | void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [ports, setPorts] = useState<PublicPort[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const [wakingKey, setWakingKey] = useState<string | null>(null);
+
+  const [sortField, setSortField] = useState<SortField>('account');
+  const [sortAsc, setSortAsc] = useState(true);
 
   // Modal states
   const [publishOpen, setPublishOpen] = useState(false);
@@ -81,6 +94,24 @@ export function PortsPage({
   const protocolFilter = searchParams.get('protocol') || 'all';
   const searchQuery = searchParams.get('q') || '';
   const viewMode: ViewMode = searchParams.get('view') === 'grouped' ? 'grouped' : 'list';
+  const showEmptyVMs = searchParams.get('empty') === '1';
+
+  const showToast = useCallback((kind: 'ok' | 'err', text: string) => {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToast({ kind, text });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 4500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   const updateParam = useCallback(
     (key: string, value: string, defaultValue = 'all') => {
@@ -101,7 +132,17 @@ export function PortsPage({
   const clearFilters = () => {
     const next = new URLSearchParams();
     if (viewMode === 'grouped') next.set('view', 'grouped');
+    if (viewMode === 'grouped' && showEmptyVMs) next.set('empty', '1');
     setSearchParams(next, { replace: true });
+  };
+
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortAsc((prev) => !prev);
+    } else {
+      setSortField(field);
+      setSortAsc(field !== 'created');
+    }
   };
 
   const loadPorts = useCallback(async () => {
@@ -124,13 +165,23 @@ export function PortsPage({
     await Promise.all([loadPorts(), Promise.resolve(onFleetRefresh?.())]);
   }, [loadPorts, onFleetRefresh]);
 
-  const copyText = async (id: string, text: string) => {
+  const handleQuickWake = async (
+    accountId: string,
+    machineId: string,
+    machineName: string,
+    machineState: string,
+  ) => {
+    const key = `${accountId}:${machineId}`;
+    const action = machineState === 'suspended' ? 'resume' : 'start';
+    setWakingKey(key);
     try {
-      await navigator.clipboard.writeText(text);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1500);
-    } catch {
-      // Clipboard may fail in non-HTTPS contexts
+      const op = await api.vmAction(accountId, machineId, action, { machineName });
+      onOperationStarted?.(accountId, machineId, op);
+      showToast('ok', `Requested ${action === 'resume' ? 'wake' : 'start'} on ${machineName || machineId}.`);
+    } catch (err) {
+      showToast('err', err instanceof ApiError ? err.message : `Failed to ${action} ${machineName || machineId}`);
+    } finally {
+      setWakingKey((prev) => (prev === key ? null : prev));
     }
   };
 
@@ -220,6 +271,42 @@ export function PortsPage({
     });
   }, [ports, accountFilter, vmFilter, accessFilter, protocolFilter, searchQuery]);
 
+  const sortedPorts = useMemo(() => {
+    const dir = sortAsc ? 1 : -1;
+    return [...filteredPorts].sort((a, b) => {
+      switch (sortField) {
+        case 'vm': {
+          const cmp = (a.machineName || a.machineId).localeCompare(b.machineName || b.machineId);
+          return (cmp !== 0 ? cmp : a.port - b.port) * dir;
+        }
+        case 'port':
+          return (a.port - b.port) * dir;
+        case 'protocol': {
+          const cmp = a.protocol.localeCompare(b.protocol);
+          return (cmp !== 0 ? cmp : a.port - b.port) * dir;
+        }
+        case 'access': {
+          const cmp = a.access.localeCompare(b.access);
+          return (cmp !== 0 ? cmp : a.port - b.port) * dir;
+        }
+        case 'created': {
+          const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+          const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+          if (ta !== tb) return (ta - tb) * dir;
+          return (a.port - b.port) * dir;
+        }
+        case 'account':
+        default: {
+          const accCmp = (a.accountName || a.accountId || '').localeCompare(b.accountName || b.accountId || '');
+          if (accCmp !== 0) return accCmp * dir;
+          const vmCmp = (a.machineName || a.machineId).localeCompare(b.machineName || b.machineId);
+          if (vmCmp !== 0) return vmCmp * dir;
+          return (a.port - b.port) * dir;
+        }
+      }
+    });
+  }, [filteredPorts, sortField, sortAsc]);
+
   const groupedPorts = useMemo<PortGroup[]>(() => {
     const vmQuotaMap = new Map<string, { state: string; canWrite: boolean; orgName: string }>();
     for (const m of fleet?.machines ?? []) {
@@ -230,8 +317,13 @@ export function PortsPage({
       });
     }
 
+    const totalPortsByVM = new Set<string>();
+    for (const p of ports) {
+      totalPortsByVM.add(`${p.accountId || ''}:${p.machineId}`);
+    }
+
     const groups = new Map<string, PortGroup>();
-    for (const p of filteredPorts) {
+    for (const p of sortedPorts) {
       const accId = p.accountId || '';
       const key = `${accId}:${p.machineId}`;
       const vmInfo = vmQuotaMap.get(key);
@@ -252,8 +344,34 @@ export function PortsPage({
       }
       grp.ports.push(p);
     }
+
+    if (viewMode === 'grouped' && showEmptyVMs && fleet?.machines) {
+      const q = searchQuery.trim().toLowerCase();
+      for (const m of fleet.machines) {
+        const key = `${m.accountId}:${m.id}`;
+        if (groups.has(key) || totalPortsByVM.has(key)) continue;
+        if (accountFilter !== 'all' && m.accountId !== accountFilter) continue;
+        if (vmFilter !== 'all' && m.id !== vmFilter) continue;
+        if (q) {
+          const hay = [m.name, m.id, m.accountName, m.orgName, m.state].filter(Boolean).join(' ').toLowerCase();
+          if (!hay.includes(q)) continue;
+        }
+        groups.set(key, {
+          key,
+          accountId: m.accountId,
+          accountName: m.accountName,
+          orgName: m.orgName,
+          machineId: m.id,
+          machineName: m.name,
+          machineState: m.state,
+          canWrite: m.canWrite,
+          ports: [],
+        });
+      }
+    }
+
     return Array.from(groups.values());
-  }, [filteredPorts, fleet?.machines]);
+  }, [sortedPorts, ports, fleet?.machines, viewMode, showEmptyVMs, accountFilter, vmFilter, searchQuery]);
 
   const stats = useMemo(() => {
     let publicCount = 0;
@@ -289,6 +407,8 @@ export function PortsPage({
     protocolFilter !== 'all' ||
     Boolean(searchQuery.trim());
 
+  const hasVisibleRows = viewMode === 'grouped' ? groupedPorts.length > 0 : sortedPorts.length > 0;
+
   const openPublishNew = (target?: PortModalTarget) => {
     setEditingPort(null);
     setFixedTarget(target);
@@ -315,69 +435,43 @@ export function PortsPage({
     port: p,
   });
 
-  const renderEndpointCell = (p: PublicPort) => {
-    const endpoint = p.address || p.url;
-    const isOffline = p.machineState && p.machineState !== 'running';
+  const renderQuickWakeButton = (
+    accountId?: string,
+    machineId?: string,
+    machineName?: string,
+    machineState?: string,
+    canWrite = true,
+  ) => {
+    if (!accountId || !machineId) return null;
+    if (machineState !== 'stopped' && machineState !== 'suspended') return null;
+    const key = `${accountId}:${machineId}`;
+    const op = activeOps[key];
+    const isBusy = wakingKey === key || op?.state === 'queued' || op?.state === 'running';
+    const isSuspended = machineState === 'suspended';
+
     return (
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {p.url ? (
-            <a
-              href={p.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="max-w-[260px] truncate font-mono text-xs text-sky-600 hover:underline dark:text-sky-400"
-              title={p.url}
-            >
-              {p.url}
-            </a>
-          ) : (
-            <span className="font-mono text-xs text-slate-700 dark:text-slate-300">{endpoint}</span>
-          )}
-          <button
-            type="button"
-            onClick={() => void copyText(`ep-${p.accountId}-${p.id}-${p.port}`, endpoint)}
-            className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-            title={p.address ? 'Copy SNI address' : 'Copy URL'}
-          >
-            {copiedId === `ep-${p.accountId}-${p.id}-${p.port}` ? (
-              <Check className="h-3.5 w-3.5 text-emerald-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </button>
-          {p.url && (
-            <a
-              href={p.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-              title="Open URL"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          {p.address && (
-            <span className="rounded bg-indigo-500/10 px-1.5 py-0.5 font-mono text-indigo-600 dark:text-indigo-400">
-              SNI: {p.address}
-            </span>
-          )}
-          {isOffline && (
-            <span
-              className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"
-              title="Endpoint returns HTTP 503 while sandbox is stopped or suspended"
-            >
-              <AlertTriangle className="h-3 w-3" />
-              VM {p.machineState} (503)
-            </span>
-          )}
-          {p.access === 'private' && (
-            <span className="text-slate-400">Token hidden (rotate to reissue)</span>
-          )}
-        </div>
-      </div>
+      <button
+        type="button"
+        disabled={!canWrite || isBusy}
+        title={
+          !canWrite
+            ? 'Account is read-only or lacks machines:write scope'
+            : isSuspended
+              ? 'Wake suspended sandbox'
+              : 'Start stopped sandbox'
+        }
+        onClick={() => void handleQuickWake(accountId, machineId, machineName || machineId, machineState)}
+        className="inline-flex items-center gap-1 rounded-md border border-emerald-500/35 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45 dark:text-emerald-300"
+      >
+        {isBusy ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : isSuspended ? (
+          <Zap className="h-3 w-3" />
+        ) : (
+          <Play className="h-3 w-3" />
+        )}
+        {isBusy ? op?.phase || 'Waking...' : isSuspended ? 'Wake VM' : 'Start VM'}
+      </button>
     );
   };
 
@@ -430,6 +524,24 @@ export function PortsPage({
 
   return (
     <div className="space-y-4">
+      {toast && (
+        <div
+          className={`flex items-center justify-between rounded-xl border px-4 py-2.5 text-xs ${
+            toast.kind === 'ok'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+              : 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {toast.kind === 'ok' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+            <span>{toast.text}</span>
+          </div>
+          <button type="button" onClick={() => setToast(null)} className="ml-4 font-semibold underline">
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -608,6 +720,18 @@ export function PortsPage({
           </button>
         )}
 
+        {viewMode === 'grouped' && (
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={showEmptyVMs}
+              onChange={(e) => updateParam('empty', e.target.checked ? '1' : '', '')}
+              className="rounded border-slate-400 text-sky-600 focus:ring-sky-500"
+            />
+            <span>Show VMs with 0 ports</span>
+          </label>
+        )}
+
         <div className="ml-auto flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-800 dark:bg-slate-950">
           <button
             type="button"
@@ -637,7 +761,7 @@ export function PortsPage({
       </div>
 
       {/* Empty States */}
-      {!loading && filteredPorts.length === 0 ? (
+      {!loading && !hasVisibleRows ? (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center dark:border-slate-800 dark:bg-slate-900/70">
           <Globe className="mx-auto h-8 w-8 text-slate-400" />
           <div className="mt-2 text-sm font-semibold text-slate-800 dark:text-slate-200">
@@ -646,7 +770,7 @@ export function PortsPage({
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {ports.length === 0
               ? 'Expose HTTP apps or TCP services from any sandbox without using CLI commands.'
-              : 'Try broadening your search query or resetting active filter chips.'}
+              : 'Try broadening your search query, toggling "Show VMs with 0 ports" in Grouped view, or resetting filters.'}
           </p>
           <div className="mt-4 flex justify-center gap-2">
             {ports.length > 0 && hasActiveFilters && (
@@ -687,6 +811,13 @@ export function PortsPage({
                     {group.machineName}
                   </Link>
                   <VMStateBadge state={group.machineState} />
+                  {renderQuickWakeButton(
+                    group.accountId,
+                    group.machineId,
+                    group.machineName,
+                    group.machineState,
+                    group.canWrite,
+                  )}
                   <span className="rounded bg-slate-200/70 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                     {group.accountName}
                     {group.orgName ? ` · ${group.orgName}` : ''}
@@ -716,46 +847,72 @@ export function PortsPage({
                 </div>
               </div>
 
-              <div className="divide-y divide-slate-200 dark:divide-slate-800">
-                {group.ports.map((p) => (
-                  <div
-                    key={`${group.key}-${p.id}-${p.port}`}
-                    className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-sky-500/10 px-2 py-0.5 font-mono text-xs font-bold text-sky-600 dark:text-sky-400">
-                          :{p.port}
-                        </span>
-                        {p.name && <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{p.name}</span>}
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] uppercase text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                          {p.protocol}
-                        </span>
-                        <span
-                          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
-                            p.access === 'private'
-                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                              : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                          }`}
-                        >
-                          {p.access === 'private' ? <Lock className="h-2.5 w-2.5" /> : <Globe className="h-2.5 w-2.5" />}
-                          {p.access}
-                        </span>
+              {group.ports.length === 0 ? (
+                <div className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">
+                  No ports published yet on this sandbox.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                  {group.ports.map((p) => (
+                    <div
+                      key={`${group.key}-${p.id}-${p.port}`}
+                      className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-md bg-sky-500/10 px-2 py-0.5 font-mono text-xs font-bold text-sky-600 dark:text-sky-400">
+                            :{p.port}
+                          </span>
+                          {p.name && (
+                            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{p.name}</span>
+                          )}
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] uppercase text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            {p.protocol}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                              p.access === 'private'
+                                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                                : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            }`}
+                          >
+                            {p.access === 'private' ? (
+                              <Lock className="h-2.5 w-2.5" />
+                            ) : (
+                              <Globe className="h-2.5 w-2.5" />
+                            )}
+                            {p.access}
+                          </span>
+                          {p.createdAt && (
+                            <span className="text-[11px] text-slate-400" title={p.createdAt}>
+                              {formatRelativeTime(p.createdAt)}
+                            </span>
+                          )}
+                        </div>
+                        <PortEndpoint
+                          port={p}
+                          offlineAction={renderQuickWakeButton(
+                            p.accountId,
+                            p.machineId,
+                            p.machineName,
+                            p.machineState,
+                            p.canWrite !== false,
+                          )}
+                        />
                       </div>
-                      {renderEndpointCell(p)}
+                      <div className="shrink-0">{renderPortActions(p)}</div>
                     </div>
-                    <div className="shrink-0">{renderPortActions(p)}</div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
       ) : (
-        /* Flat List View: Mobile Cards + Desktop Table */
+        /* Flat List View: Mobile Cards + Desktop Sortable Table */
         <>
           <div className="space-y-3 md:hidden">
-            {filteredPorts.map((p) => (
+            {sortedPorts.map((p) => (
               <div
                 key={`mob-${p.accountId}-${p.machineId}-${p.id}-${p.port}`}
                 className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/70"
@@ -780,6 +937,7 @@ export function PortsPage({
                     <div className="mt-0.5 text-[11px] text-slate-500">
                       {p.accountName}
                       {p.orgName ? ` · ${p.orgName}` : ''}
+                      {p.createdAt ? ` · ${formatRelativeTime(p.createdAt)}` : ''}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1">
@@ -798,7 +956,16 @@ export function PortsPage({
                   </div>
                 </div>
 
-                {renderEndpointCell(p)}
+                <PortEndpoint
+                  port={p}
+                  offlineAction={renderQuickWakeButton(
+                    p.accountId,
+                    p.machineId,
+                    p.machineName,
+                    p.machineState,
+                    p.canWrite !== false,
+                  )}
+                />
                 {renderPortActions(p, true)}
               </div>
             ))}
@@ -809,16 +976,71 @@ export function PortsPage({
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:bg-slate-950/60">
                   <tr>
-                    <th className="px-4 py-2.5">Account / Org</th>
-                    <th className="px-4 py-2.5">VM &amp; State</th>
-                    <th className="px-4 py-2.5">Port &amp; Name</th>
-                    <th className="px-4 py-2.5">Proto / Access</th>
+                    <th className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('account')}
+                        className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-100"
+                      >
+                        Account / Org
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
+                    <th className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('vm')}
+                        className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-100"
+                      >
+                        VM &amp; State
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
+                    <th className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('port')}
+                        className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-100"
+                      >
+                        Port &amp; Name
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
+                    <th className="px-4 py-2.5">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => toggleSort('protocol')}
+                          className="hover:text-slate-900 dark:hover:text-slate-100"
+                        >
+                          Proto
+                        </button>
+                        <span>/</span>
+                        <button
+                          type="button"
+                          onClick={() => toggleSort('access')}
+                          className="hover:text-slate-900 dark:hover:text-slate-100"
+                        >
+                          Access
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('created')}
+                        className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-100"
+                      >
+                        Created
+                        <ArrowUpDown className="h-3 w-3" />
+                      </button>
+                    </th>
                     <th className="px-4 py-2.5">Endpoint</th>
                     <th className="px-4 py-2.5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                  {filteredPorts.map((p) => (
+                  {sortedPorts.map((p) => (
                     <tr
                       key={`${p.accountId}-${p.machineId}-${p.id}-${p.port}`}
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30"
@@ -861,7 +1083,21 @@ export function PortsPage({
                           </span>
                         </div>
                       </td>
-                      <td className="px-4 py-3">{renderEndpointCell(p)}</td>
+                      <td className="px-4 py-3 font-mono text-[11px] text-slate-500" title={p.createdAt || undefined}>
+                        {p.createdAt ? formatRelativeTime(p.createdAt) : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <PortEndpoint
+                          port={p}
+                          offlineAction={renderQuickWakeButton(
+                            p.accountId,
+                            p.machineId,
+                            p.machineName,
+                            p.machineState,
+                            p.canWrite !== false,
+                          )}
+                        />
+                      </td>
                       <td className="px-4 py-3 text-right">{renderPortActions(p)}</td>
                     </tr>
                   ))}
@@ -883,9 +1119,19 @@ export function PortsPage({
         fleet={fleet}
         fixedTarget={fixedTarget}
         editingPort={editingPort}
+        existingPorts={ports}
         defaultAccountId={accountFilter !== 'all' ? accountFilter : undefined}
         defaultMachineId={vmFilter !== 'all' ? vmFilter : undefined}
-        onPublished={() => void refreshAll()}
+        onSwitchToEdit={(existing) => openEditPort(existing)}
+        onPublished={(result) => {
+          showToast(
+            'ok',
+            editingPort
+              ? `Updated port :${result.port} (${result.access}).`
+              : `Published port :${result.port} (${result.protocol.toUpperCase()}, ${result.access}).`,
+          );
+          void refreshAll();
+        }}
       />
 
       <RotateTokenModal
@@ -895,6 +1141,7 @@ export function PortsPage({
           const machineName = rotateTarget?.machineName;
           setRotateTarget(null);
           setRevealedPort({ port: updated, machineName });
+          showToast('ok', `Rotated private token for port :${updated.port}.`);
           void refreshAll();
         }}
       />
@@ -903,7 +1150,9 @@ export function PortsPage({
         target={unpublishTarget}
         onClose={() => setUnpublishTarget(null)}
         onUnpublished={() => {
+          const removedPort = unpublishTarget?.port.port;
           setUnpublishTarget(null);
+          showToast('ok', `Unpublished port :${removedPort}.`);
           void refreshAll();
         }}
       />

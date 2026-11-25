@@ -2,8 +2,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  CheckCircle2,
   Copy,
-  ExternalLink,
   Globe,
   HardDrive,
   KeyRound,
@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { LifecycleControls } from '../components/LifecycleControls';
 import { MetricCharts } from '../components/MetricCharts';
+import { PortEndpoint } from '../components/PortEndpoint';
 import {
   PublishPortModal,
   RotateTokenModal,
@@ -70,7 +71,8 @@ export function VMDetailPage({
   const [procSearch, setProcSearch] = useState('');
   const [copiedId, setCopiedId] = useState(false);
   const [copiedConsole, setCopiedConsole] = useState(false);
-  const [copiedPortKey, setCopiedPortKey] = useState<string | null>(null);
+  const [portsToast, setPortsToast] = useState<string | null>(null);
+  const portsToastTimerRef = useRef<number | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [editingPort, setEditingPort] = useState<PublicPort | null>(null);
   const [rotateTarget, setRotateTarget] = useState<{
@@ -110,6 +112,7 @@ export function VMDetailPage({
     async (targetTab: DetailTab, range: string) => {
       if (!accountId || !machineId) return;
       setTabLoading(true);
+      setError('');
       try {
         if (targetTab === 'metrics') {
           const res = await api.getVMMetrics(accountId, machineId, range);
@@ -155,15 +158,20 @@ export function VMDetailPage({
     await onFleetRefresh?.();
   }, [accountId, machineId, onFleetRefresh]);
 
-  const copyPortText = async (key: string, value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedPortKey(key);
-      setTimeout(() => setCopiedPortKey((prev) => (prev === key ? null : prev)), 1500);
-    } catch {
-      // Ignore clipboard failures
-    }
-  };
+  const showPortsToast = useCallback((msg: string) => {
+    if (portsToastTimerRef.current) window.clearTimeout(portsToastTimerRef.current);
+    setPortsToast(msg);
+    portsToastTimerRef.current = window.setTimeout(() => {
+      setPortsToast(null);
+      portsToastTimerRef.current = null;
+    }, 4500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (portsToastTimerRef.current) window.clearTimeout(portsToastTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     void loadVM();
@@ -629,6 +637,18 @@ export function VMDetailPage({
               </button>
             </div>
 
+            {portsToast && (
+              <div className="mb-3 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+                <span className="inline-flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  {portsToast}
+                </span>
+                <button type="button" onClick={() => setPortsToast(null)} className="font-semibold underline">
+                  Dismiss
+                </button>
+              </div>
+            )}
+
             {portsEnabled === false && (
               <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-700 dark:text-amber-300">
                 Port publishing is not enabled for this sandbox plan.
@@ -647,7 +667,6 @@ export function VMDetailPage({
             ) : (
               <div className="space-y-2.5">
                 {ports.map((p) => {
-                  const endpoint = p.address || p.url;
                   const canWrite = Boolean(account?.canWrite);
                   return (
                     <div
@@ -679,6 +698,11 @@ export function VMDetailPage({
                             )}
                             {p.access}
                           </span>
+                          {p.createdAt && (
+                            <span className="font-sans text-[10px] text-slate-400" title={p.createdAt}>
+                              {formatRelativeTime(p.createdAt)}
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -733,48 +757,7 @@ export function VMDetailPage({
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {p.url ? (
-                          <a
-                            href={p.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="truncate font-mono text-[11px] text-sky-600 hover:underline dark:text-sky-400"
-                          >
-                            {p.url}
-                          </a>
-                        ) : (
-                          <span className="font-mono text-[11px]">{endpoint}</span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => void copyPortText(`${p.id}-${p.port}`, endpoint)}
-                          className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                          title={p.address ? 'Copy SNI address' : 'Copy URL'}
-                        >
-                          {copiedPortKey === `${p.id}-${p.port}` ? (
-                            <Check className="h-3 w-3 text-emerald-500" />
-                          ) : (
-                            <Copy className="h-3 w-3" />
-                          )}
-                        </button>
-                        {p.url && (
-                          <a
-                            href={p.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                            title="Open URL"
-                          >
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        )}
-                        {p.address && (
-                          <span className="rounded bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
-                            SNI: {p.address}
-                          </span>
-                        )}
-                      </div>
+                      <PortEndpoint port={p} compact />
                     </div>
                   );
                 })}
@@ -858,7 +841,16 @@ export function VMDetailPage({
           canWrite: Boolean(account?.canWrite),
         }}
         editingPort={editingPort}
-        onPublished={() => void refreshMachinePorts()}
+        existingPorts={ports}
+        onSwitchToEdit={(existing) => setEditingPort(existing)}
+        onPublished={(result) => {
+          showPortsToast(
+            editingPort
+              ? `Updated port :${result.port} (${result.access}).`
+              : `Published port :${result.port} (${result.protocol.toUpperCase()}, ${result.access}).`,
+          );
+          void refreshMachinePorts();
+        }}
       />
 
       <RotateTokenModal
@@ -867,6 +859,7 @@ export function VMDetailPage({
         onRotated={(updated) => {
           setRotateTarget(null);
           setRevealedPort(updated);
+          showPortsToast(`Rotated private token for port :${updated.port}.`);
           void refreshMachinePorts();
         }}
       />
@@ -875,7 +868,9 @@ export function VMDetailPage({
         target={unpublishTarget}
         onClose={() => setUnpublishTarget(null)}
         onUnpublished={() => {
+          const removedPort = unpublishTarget?.port.port;
           setUnpublishTarget(null);
+          showPortsToast(`Unpublished port :${removedPort}.`);
           void refreshMachinePorts();
         }}
       />

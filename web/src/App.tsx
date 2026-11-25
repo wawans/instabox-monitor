@@ -152,7 +152,17 @@ export default function App() {
               />
             }
           />
-          <Route path="/ports" element={<PortsPage fleet={fleet} onFleetRefresh={loadFleet} />} />
+          <Route
+            path="/ports"
+            element={
+              <PortsPage
+                fleet={fleet}
+                activeOps={activeOps}
+                onOperationStarted={handleOperationStarted}
+                onFleetRefresh={loadFleet}
+              />
+            }
+          />
           <Route path="/accounts" element={<AccountsPage onAccountsChanged={loadFleet} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
