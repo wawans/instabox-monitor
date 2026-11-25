@@ -349,3 +349,84 @@ func TestPortCacheUpsertStripsTokenAndRemoveUpdatesSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceMachineCachedPortsPreservesOtherVMsAndStripsTokens(t *testing.T) {
+	st, ciph := setupTestEnv(t)
+	ctx := context.Background()
+	createAcc(t, st, ciph, "acc-1", "Acct 1", "https://example.invalid", "ibk_1")
+
+	mgr := NewManager(config.Config{
+		PollIntervalSeconds:        10,
+		MetricsPollIntervalSeconds: 10,
+		AccountMaxAuthFailures:     3,
+	}, st, ciph, nil)
+
+	// Seed ports on m_1 and m_2.
+	mgr.UpsertCachedPort(ctx, "acc-1", instabox.PublicPort{
+		ID: "port_3000", MachineID: "m_1", Name: "old", Port: 3000, Protocol: "http", Access: "public", URL: "https://3000-m1.instabox.sh",
+	})
+	mgr.UpsertCachedPort(ctx, "acc-1", instabox.PublicPort{
+		ID: "port_8080", MachineID: "m_2", Name: "other-vm", Port: 8080, Protocol: "http", Access: "public", URL: "https://8080-m2.instabox.sh",
+	})
+
+	ch, unsub := mgr.Broker().Subscribe()
+	defer unsub()
+
+	livePorts := []instabox.PublicPort{
+		{ID: "port_3000", MachineID: "m_1", Name: "web-live", Port: 3000, Protocol: "http", Access: "public", URL: "https://3000-m1.instabox.sh"},
+		{ID: "port_5173", MachineID: "", Name: "vite", Port: 5173, Protocol: "http", Access: "private", URL: "https://5173-m1.instabox.sh", Token: "ibp_live_secret", TokenURL: "https://5173-m1.instabox.sh?_token=ibp_live_secret"},
+	}
+	mgr.ReplaceMachineCachedPorts(ctx, "acc-1", "m_1", livePorts)
+
+	// Should publish 1 fleet_updated event on change.
+	select {
+	case <-ch:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected fleet_updated SSE event after ReplaceMachineCachedPorts")
+	}
+
+	snap := mgr.SnapshotCopy()["acc-1"]
+	if len(snap.Ports) != 3 {
+		t.Fatalf("expected 3 total ports (2 on m_1, 1 on m_2), got %+v", snap.Ports)
+	}
+	var m2Found, m1ViteFound bool
+	for _, p := range snap.Ports {
+		if p.Token != "" || p.TokenURL != "" {
+			t.Fatalf("SECURITY VIOLATION: token leaked in cached port %+v", p)
+		}
+		if p.MachineID == "m_2" && p.Port == 8080 {
+			m2Found = true
+		}
+		if p.MachineID == "m_1" && p.Port == 5173 && p.Name == "vite" {
+			m1ViteFound = true
+		}
+	}
+	if !m2Found || !m1ViteFound {
+		t.Fatalf("expected m_2:8080 preserved and m_1:5173 added, got %+v", snap.Ports)
+	}
+
+	// Verify SQLite snapshot persisted the sync cleanly with 0 secrets.
+	dbSnaps, err := st.ListSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	for _, s := range dbSnaps {
+		if s.AccountID == "acc-1" {
+			var ports []instabox.PublicPort
+			if err := json.Unmarshal([]byte(s.PortsJSON), &ports); err != nil {
+				t.Fatalf("unmarshal PortsJSON: %v", err)
+			}
+			if len(ports) != 3 {
+				t.Fatalf("expected 3 ports in SQLite snapshot, got %+v", ports)
+			}
+		}
+	}
+
+	// Repeating identical live ports must NOT emit another SSE broadcast.
+	mgr.ReplaceMachineCachedPorts(ctx, "acc-1", "m_1", livePorts)
+	select {
+	case msg := <-ch:
+		t.Fatalf("expected no SSE event when ports are unchanged, got %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+	}
+}

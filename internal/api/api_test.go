@@ -541,3 +541,91 @@ func TestAppPortPublishRotateUnpublishAndZeroLeak(t *testing.T) {
 		t.Fatalf("expected 0 ports after unpublish, got %+v", portsResp.Ports)
 	}
 }
+
+func TestGetMachinePortsSyncsGlobalPortsCache(t *testing.T) {
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "ops"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/orgs":
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{Orgs: []instabox.Org{{ID: "org_a", Name: "Production"}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines":
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_run", Name: "api-vm", OrgID: "org_a", State: "running"},
+					{ID: "m_other", Name: "db-vm", OrgID: "org_a", State: "running"},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{
+				Enabled: true,
+				Ports: []instabox.PublicPort{
+					{ID: "port_4000", MachineID: "m_other", Name: "db", Port: 4000, Protocol: "tcp", Access: "public", Address: "4000-m_other.instabox.sh:443", URL: "tls://4000-m_other.instabox.sh:443"},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines/m_run/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{
+				Enabled: true,
+				Ports: []instabox.PublicPort{
+					{
+						ID:        "port_9090",
+						MachineID: "m_run",
+						Name:      "cli-prom",
+						Port:      9090,
+						Protocol:  "http",
+						Access:    "private",
+						URL:       "https://9090-mrun.instabox.sh",
+						Token:     "ibp_cli_secret_must_be_stripped",
+						TokenURL:  "https://9090-mrun.instabox.sh?_token=ibp_cli_secret_must_be_stripped",
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, pm, ciph := newTestServer(t, "")
+	ctx := context.Background()
+	enc, _ := ciph.Encrypt("ibk_rw_9999")
+	acc, _ := st.CreateAccount(ctx, store.Account{
+		ID: "acc-rw", Name: "Alpha", BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey("ibk_rw_9999"),
+		KeyHint: "ibk_••••9999", Enabled: true, Source: store.SourceUI,
+	})
+	pm.ReconcileAccount(ctx, acc.ID)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if snaps := pm.SnapshotCopy(); len(snaps[acc.ID].Machines) == 2 && len(snaps[acc.ID].Ports) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Calling machine ports endpoint fetches m_run:9090 (e.g., created via CLI) and syncs it into global cache.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/acc-rw/vms/m_run/ports", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET machine ports = %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "ibp_cli_secret_must_be_stripped") {
+		t.Fatalf("SECURITY VIOLATION: secret leaked from machine ports GET")
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ports", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/ports = %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "ibp_cli_secret_must_be_stripped") {
+		t.Fatalf("SECURITY VIOLATION: secret leaked into /api/ports cache")
+	}
+	var portsResp struct {
+		Ports []portView `json:"ports"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &portsResp)
+	if len(portsResp.Ports) != 2 {
+		t.Fatalf("expected 2 ports (db:4000 preserved + cli-prom:9090 synced), got %+v", portsResp.Ports)
+	}
+}

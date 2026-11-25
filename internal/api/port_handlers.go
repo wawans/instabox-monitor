@@ -111,6 +111,7 @@ func (s *Server) handleListMachinePorts(w http.ResponseWriter, r *http.Request) 
 		sanitized[i] = poller.SanitizePublicPort(p)
 	}
 	list.Ports = sanitized
+	s.poller.ReplaceMachineCachedPorts(context.WithoutCancel(r.Context()), accountID, machineID, sanitized)
 	writeJSON(w, http.StatusOK, list)
 }
 

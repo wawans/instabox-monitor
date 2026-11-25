@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -271,6 +272,102 @@ func (m *Manager) RemoveCachedPort(ctx context.Context, accountID, machineID str
 		}
 		return next
 	})
+}
+
+// ReplaceMachineCachedPorts synchronizes all ports for a single machine into the account cache
+// and SQLite snapshot while keeping other machines' ports intact and stripping secrets.
+// Skips persistence and SSE broadcast if the machine's sanitized port list is unchanged.
+func (m *Manager) ReplaceMachineCachedPorts(ctx context.Context, accountID, machineID string, machinePorts []instabox.PublicPort) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sanitized := sanitizePublicPorts(machinePorts)
+	for i := range sanitized {
+		if sanitized[i].MachineID == "" {
+			sanitized[i].MachineID = machineID
+		}
+	}
+
+	m.mu.Lock()
+	c, ok := m.cache[accountID]
+	if !ok || c == nil {
+		if len(sanitized) == 0 {
+			m.mu.Unlock()
+			return
+		}
+		c = &AccountCache{
+			AccountID:   accountID,
+			LiveMetrics: make(map[string]VMLiveTelemetry),
+			FetchedAt:   m.nowFn(),
+		}
+		m.cache[accountID] = c
+	}
+	if c.FetchedAt.IsZero() {
+		c.FetchedAt = m.nowFn()
+	}
+
+	var existingMachine []instabox.PublicPort
+	otherPorts := make([]instabox.PublicPort, 0, len(c.Ports))
+	for _, p := range c.Ports {
+		if p.MachineID == machineID {
+			existingMachine = append(existingMachine, p)
+		} else {
+			otherPorts = append(otherPorts, p)
+		}
+	}
+
+	if publicPortsEqual(existingMachine, sanitized) {
+		m.mu.Unlock()
+		return
+	}
+
+	next := make([]instabox.PublicPort, 0, len(otherPorts)+len(sanitized))
+	next = append(next, otherPorts...)
+	next = append(next, sanitized...)
+	c.Ports = next
+	snap := buildAccountSnapshot(accountID, c.Machines, c.Ports, c.LiveMetrics, c.FetchedAt, c.MetricsFetchedAt)
+	m.mu.Unlock()
+
+	_ = m.store.SaveSnapshot(ctx, snap)
+	m.broker.Publish(Event{Type: "fleet_updated", AccountID: accountID})
+}
+
+func publicPortsEqual(a, b []instabox.PublicPort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	norm := func(in []instabox.PublicPort) []instabox.PublicPort {
+		out := sanitizePublicPorts(in)
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Port != out[j].Port {
+				return out[i].Port < out[j].Port
+			}
+			if out[i].Protocol != out[j].Protocol {
+				return out[i].Protocol < out[j].Protocol
+			}
+			return out[i].ID < out[j].ID
+		})
+		return out
+	}
+	na := norm(a)
+	nb := norm(b)
+	for i := range na {
+		if na[i].ID != nb[i].ID ||
+			na[i].MachineID != nb[i].MachineID ||
+			na[i].Name != nb[i].Name ||
+			na[i].Port != nb[i].Port ||
+			na[i].Protocol != nb[i].Protocol ||
+			na[i].Access != nb[i].Access ||
+			na[i].Address != nb[i].Address ||
+			na[i].URL != nb[i].URL ||
+			na[i].CreatedAt != nb[i].CreatedAt {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) updateCachedPorts(ctx context.Context, accountID string, mutate func([]instabox.PublicPort) []instabox.PublicPort) {
