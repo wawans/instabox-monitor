@@ -13,6 +13,8 @@ import type {
   Org,
   ProcessListResponse,
   PublicPort,
+  PublicPortListResponse,
+  PublishPortPayload,
   SSEEvent,
   WakeAllResponse,
 } from '../types/instabox';
@@ -159,6 +161,25 @@ export const api = {
         body: JSON.stringify(opts ?? {}),
       },
     ),
+  listMachinePorts: (accountId: string, machineId: string) =>
+    request<PublicPortListResponse>(
+      `/api/accounts/${encodeURIComponent(accountId)}/vms/${encodeURIComponent(machineId)}/ports`,
+    ),
+  publishPort: (accountId: string, machineId: string, payload: PublishPortPayload) =>
+    request<PublicPort>(
+      `/api/accounts/${encodeURIComponent(accountId)}/vms/${encodeURIComponent(machineId)}/ports`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    ),
+  unpublishPort: (accountId: string, machineId: string, port: number, machineName?: string) => {
+    const qs = machineName ? `?machineName=${encodeURIComponent(machineName)}` : '';
+    return request<void>(
+      `/api/accounts/${encodeURIComponent(accountId)}/vms/${encodeURIComponent(machineId)}/ports/${port}${qs}`,
+      { method: 'DELETE' },
+    );
+  },
 };
 
 export type SSEState = 'connecting' | 'connected' | 'reconnecting';

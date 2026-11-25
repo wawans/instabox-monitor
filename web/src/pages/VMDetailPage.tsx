@@ -4,15 +4,27 @@ import {
   Check,
   Copy,
   ExternalLink,
+  Globe,
   HardDrive,
+  KeyRound,
   Loader2,
+  Lock,
+  Pencil,
+  Plus,
   RefreshCw,
   Terminal,
+  Trash2,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { LifecycleControls } from '../components/LifecycleControls';
 import { MetricCharts } from '../components/MetricCharts';
+import {
+  PublishPortModal,
+  RotateTokenModal,
+  TokenRevealModal,
+  UnpublishPortModal,
+} from '../components/PublishPortModal';
 import { VMStateBadge, VMWarningBadges } from '../components/StateBadge';
 import { api, ApiError } from '../lib/api';
 import { formatBytes, formatDurationSeconds, formatMemMiB, formatRelativeTime, formatUptime } from '../lib/format';
@@ -33,9 +45,11 @@ const TIME_RANGES = ['15m', '1h', '6h', '24h'] as const;
 export function VMDetailPage({
   activeOps,
   onOperationStarted,
+  onFleetRefresh,
 }: {
   activeOps: Record<string, Operation>;
   onOperationStarted: (accountId: string, machineId: string, op: Operation) => void;
+  onFleetRefresh?: () => Promise<void> | void;
 }) {
   const { accountId = '', machineId = '' } = useParams();
   const [tab, setTab] = useState<DetailTab>('metrics');
@@ -44,6 +58,7 @@ export function VMDetailPage({
   const [account, setAccount] = useState<Account | null>(null);
   const [vm, setVM] = useState<Machine | null>(null);
   const [ports, setPorts] = useState<PublicPort[]>([]);
+  const [portsEnabled, setPortsEnabled] = useState<boolean | null>(null);
   const [metrics, setMetrics] = useState<MachineMetricsResponse | null>(null);
   const [disk, setDisk] = useState<MachineDisk | null>(null);
   const [processes, setProcesses] = useState<ProcessListResponse | null>(null);
@@ -55,6 +70,22 @@ export function VMDetailPage({
   const [procSearch, setProcSearch] = useState('');
   const [copiedId, setCopiedId] = useState(false);
   const [copiedConsole, setCopiedConsole] = useState(false);
+  const [copiedPortKey, setCopiedPortKey] = useState<string | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [editingPort, setEditingPort] = useState<PublicPort | null>(null);
+  const [rotateTarget, setRotateTarget] = useState<{
+    accountId: string;
+    machineId: string;
+    machineName?: string;
+    port: PublicPort;
+  } | null>(null);
+  const [unpublishTarget, setUnpublishTarget] = useState<{
+    accountId: string;
+    machineId: string;
+    machineName?: string;
+    port: PublicPort;
+  } | null>(null);
+  const [revealedPort, setRevealedPort] = useState<PublicPort | null>(null);
   const consoleRef = useRef<HTMLPreElement | null>(null);
 
   const opKey = `${accountId}:${machineId}`;
@@ -96,6 +127,10 @@ export function VMDetailPage({
           setTimeout(() => {
             if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
           }, 50);
+        } else if (targetTab === 'ports') {
+          const res = await api.listMachinePorts(accountId, machineId);
+          setPorts(res.ports ?? []);
+          setPortsEnabled(res.enabled);
         }
       } catch (err) {
         if (targetTab !== 'disk') {
@@ -107,6 +142,28 @@ export function VMDetailPage({
     },
     [accountId, machineId],
   );
+
+  const refreshMachinePorts = useCallback(async () => {
+    if (!accountId || !machineId) return;
+    try {
+      const res = await api.listMachinePorts(accountId, machineId);
+      setPorts(res.ports ?? []);
+      setPortsEnabled(res.enabled);
+    } catch {
+      // Fallback handled cleanly by loadVM/fleet sync
+    }
+    await onFleetRefresh?.();
+  }, [accountId, machineId, onFleetRefresh]);
+
+  const copyPortText = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedPortKey(key);
+      setTimeout(() => setCopiedPortKey((prev) => (prev === key ? null : prev)), 1500);
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
 
   useEffect(() => {
     void loadVM();
@@ -541,44 +598,186 @@ export function VMDetailPage({
       {tab === 'ports' && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs dark:border-slate-800 dark:bg-slate-900/70">
-            <h3 className="mb-3 font-semibold">Exposed Ports ({ports.length})</h3>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="font-semibold">Exposed Ports ({ports.length} / 16)</h3>
+                <Link
+                  to={`/ports?account=${encodeURIComponent(accountId)}&vm=${encodeURIComponent(machineId)}`}
+                  className="text-[11px] font-medium text-sky-600 hover:underline dark:text-sky-400"
+                >
+                  Manage in Ports →
+                </Link>
+              </div>
+              <button
+                type="button"
+                disabled={!account?.canWrite || ports.length >= 16}
+                title={
+                  !account?.canWrite
+                    ? 'Account is disabled, read-only, or lacks machines:write scope'
+                    : ports.length >= 16
+                      ? 'Maximum 16 exposed ports reached'
+                      : 'Publish a new port on this VM'
+                }
+                onClick={() => {
+                  setEditingPort(null);
+                  setPublishOpen(true);
+                }}
+                className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Publish Port
+              </button>
+            </div>
+
+            {portsEnabled === false && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-700 dark:text-amber-300">
+                Port publishing is not enabled for this sandbox plan.
+              </div>
+            )}
+
+            {vm.state !== 'running' && ports.length > 0 && (
+              <div className="mb-3 flex items-center gap-1.5 rounded-lg border border-sky-500/25 bg-sky-500/10 p-2 text-[11px] text-sky-700 dark:text-sky-300">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-sky-500" />
+                Sandbox is {vm.state}; exposed endpoints return HTTP 503 until running.
+              </div>
+            )}
+
             {ports.length === 0 ? (
               <p className="text-slate-500">No public or private ports exposed on this sandbox.</p>
             ) : (
-              <div className="space-y-2">
-                {ports.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 dark:border-slate-800"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 font-mono">
-                        <span className="font-semibold">:{p.port}</span>
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase dark:bg-slate-800">
-                          {p.protocol}
-                        </span>
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${
-                            p.access === 'public'
-                              ? 'bg-emerald-500/15 text-emerald-500'
-                              : 'bg-amber-500/15 text-amber-500'
-                          }`}
-                        >
-                          {p.access}
-                        </span>
-                      </div>
-                      <div className="mt-1 truncate font-mono text-[11px] text-sky-500">{p.url}</div>
-                    </div>
-                    <a
-                      href={p.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="ml-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+              <div className="space-y-2.5">
+                {ports.map((p) => {
+                  const endpoint = p.address || p.url;
+                  const canWrite = Boolean(account?.canWrite);
+                  return (
+                    <div
+                      key={`${p.id}-${p.port}`}
+                      className="space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800"
                     >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  </div>
-                ))}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5 font-mono">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">:{p.port}</span>
+                          {p.name && (
+                            <span className="font-sans font-semibold text-slate-700 dark:text-slate-300">
+                              {p.name}
+                            </span>
+                          )}
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase dark:bg-slate-800">
+                            {p.protocol}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase ${
+                              p.access === 'public'
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {p.access === 'private' ? (
+                              <Lock className="h-2.5 w-2.5" />
+                            ) : (
+                              <Globe className="h-2.5 w-2.5" />
+                            )}
+                            {p.access}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={!canWrite}
+                            title={canWrite ? 'Edit name or access' : 'Read-only account'}
+                            onClick={() => {
+                              setEditingPort(p);
+                              setPublishOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700 dark:hover:bg-slate-800"
+                          >
+                            <Pencil className="h-3 w-3" />
+                            Edit
+                          </button>
+                          {p.access === 'private' && (
+                            <button
+                              type="button"
+                              disabled={!canWrite}
+                              title={canWrite ? 'Rotate private token' : 'Read-only account'}
+                              onClick={() =>
+                                setRotateTarget({
+                                  accountId,
+                                  machineId,
+                                  machineName: vm.name,
+                                  port: p,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-45 dark:text-amber-300"
+                            >
+                              <KeyRound className="h-3 w-3" />
+                              Rotate
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={!canWrite}
+                            title={canWrite ? 'Unpublish port' : 'Read-only account'}
+                            onClick={() =>
+                              setUnpublishTarget({
+                                accountId,
+                                machineId,
+                                machineName: vm.name,
+                                port: p,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-400"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {p.url ? (
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="truncate font-mono text-[11px] text-sky-600 hover:underline dark:text-sky-400"
+                          >
+                            {p.url}
+                          </a>
+                        ) : (
+                          <span className="font-mono text-[11px]">{endpoint}</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void copyPortText(`${p.id}-${p.port}`, endpoint)}
+                          className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                          title={p.address ? 'Copy SNI address' : 'Copy URL'}
+                        >
+                          {copiedPortKey === `${p.id}-${p.port}` ? (
+                            <Check className="h-3 w-3 text-emerald-500" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                        </button>
+                        {p.url && (
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                            title="Open URL"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                        {p.address && (
+                          <span className="rounded bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
+                            SNI: {p.address}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -642,6 +841,50 @@ export function VMDetailPage({
           </div>
         </div>
       )}
+
+      <PublishPortModal
+        isOpen={publishOpen}
+        onClose={() => {
+          setPublishOpen(false);
+          setEditingPort(null);
+        }}
+        fixedTarget={{
+          accountId,
+          accountName: account?.name || accountId,
+          machineId,
+          machineName: vm.name,
+          machineState: vm.state,
+          portsCount: ports.length,
+          canWrite: Boolean(account?.canWrite),
+        }}
+        editingPort={editingPort}
+        onPublished={() => void refreshMachinePorts()}
+      />
+
+      <RotateTokenModal
+        target={rotateTarget}
+        onClose={() => setRotateTarget(null)}
+        onRotated={(updated) => {
+          setRotateTarget(null);
+          setRevealedPort(updated);
+          void refreshMachinePorts();
+        }}
+      />
+
+      <UnpublishPortModal
+        target={unpublishTarget}
+        onClose={() => setUnpublishTarget(null)}
+        onUnpublished={() => {
+          setUnpublishTarget(null);
+          void refreshMachinePorts();
+        }}
+      />
+
+      <TokenRevealModal
+        port={revealedPort}
+        machineName={vm.name}
+        onClose={() => setRevealedPort(null)}
+      />
     </div>
   );
 }
