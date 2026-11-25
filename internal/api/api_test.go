@@ -313,3 +313,231 @@ func TestWakeAllForceStopAndAdaptiveReadOnlyScope(t *testing.T) {
 		t.Fatalf("force stop = %d (hits=%d): %s", rec.Code, forceStopped.Load(), string(body))
 	}
 }
+
+func TestAppPortPublishRotateUnpublishAndZeroLeak(t *testing.T) {
+	var publishCalls, deleteCalls atomic.Int32
+
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-API-Key")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "ops"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/orgs":
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{
+				Orgs: []instabox.Org{{ID: "org_a", Name: "Production"}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines":
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_run", Name: "api-vm", OrgID: "org_a", State: "running"},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{Enabled: true, Ports: []instabox.PublicPort{}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines/m_run/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{
+				Enabled: true,
+				Ports: []instabox.PublicPort{
+					{
+						ID:        "port_3000",
+						MachineID: "m_run",
+						Name:      "web",
+						Port:      3000,
+						Protocol:  "http",
+						Access:    "private",
+						URL:       "https://3000-mrun.instabox.sh",
+						Token:     "ibp_should_never_pass_get",
+						TokenURL:  "https://3000-mrun.instabox.sh?_token=ibp_should_never_pass_get",
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/machines/m_run/ports":
+			if key == "ibk_scope_3333" {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]any{"code": "missing_scope", "message": "machines:write required"},
+				})
+				return
+			}
+			publishCalls.Add(1)
+			var req instabox.PublishPortRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode upstream publish: %v", err)
+			}
+			resp := instabox.PublicPort{
+				ID:        "port_3000",
+				MachineID: "m_run",
+				Name:      req.Name,
+				Port:      req.Port,
+				Protocol:  req.Protocol,
+				Access:    req.Access,
+				URL:       "https://3000-mrun.instabox.sh",
+			}
+			if req.Access == "private" {
+				tok := "ibp_secret_one_time_1"
+				if req.RotateToken {
+					tok = "ibp_secret_rotated_2"
+				}
+				resp.Token = tok
+				resp.TokenURL = "https://3000-mrun.instabox.sh?_token=" + tok
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/machines/m_run/ports/3000":
+			deleteCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, pm, ciph := newTestServer(t, "")
+	ctx := context.Background()
+
+	createSeed := func(id, name, key string, readOnly, enabled bool) store.Account {
+		enc, _ := ciph.Encrypt(key)
+		acc, _ := st.CreateAccount(ctx, store.Account{
+			ID: id, Name: name, BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey(key),
+			KeyHint: crypto.MaskAPIKey(key), Enabled: enabled, ReadOnly: readOnly, Source: store.SourceUI,
+		})
+		pm.ReconcileAccount(ctx, acc.ID)
+		return acc
+	}
+
+	accRW := createSeed("acc-rw", "Alpha Account", "ibk_rw_1111", false, true)
+	createSeed("acc-ro", "ReadOnly Account", "ibk_ro_2222", true, true)
+	createSeed("acc-scope", "Scope Account", "ibk_scope_3333", false, true)
+	createSeed("acc-dis", "Disabled Account", "ibk_dis_4444", false, false)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		snaps := pm.SnapshotCopy()
+		if len(snaps[accRW.ID].Machines) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// 1. Validation rejections (must fail before upstream).
+	badPayloads := []struct {
+		name string
+		body string
+	}{
+		{"low port", `{"port":80,"protocol":"http","access":"public"}`},
+		{"reserved 5901", `{"port":5901,"protocol":"http","access":"public"}`},
+		{"reserved 6768", `{"port":6768,"protocol":"http","access":"public"}`},
+		{"tcp private", `{"port":5432,"protocol":"tcp","access":"private"}`},
+		{"rotate public", `{"port":3000,"protocol":"http","access":"public","rotateToken":true}`},
+	}
+	for _, tc := range badPayloads {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-rw/vms/m_run/ports", strings.NewReader(tc.body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400: %s", tc.name, rec.Code, rec.Body.String())
+		}
+	}
+	if publishCalls.Load() != 0 {
+		t.Fatalf("validation failures should not hit upstream, got %d calls", publishCalls.Load())
+	}
+
+	// 2. ReadOnly / Disabled / Missing Scope checks.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-ro/vms/m_run/ports", strings.NewReader(`{"port":3000}`)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("read-only publish = %d, want 403", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-dis/vms/m_run/ports", strings.NewReader(`{"port":3000}`)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("disabled publish = %d, want 403", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-scope/vms/m_run/ports", strings.NewReader(`{"port":3000}`)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing_scope publish = %d, want 403", rec.Code)
+	}
+	scopeAcc, _ := st.GetAccount(ctx, "acc-scope")
+	if scopeAcc.WriteCapable == nil || *scopeAcc.WriteCapable {
+		t.Fatalf("expected acc-scope WriteCapable=false, got %+v", scopeAcc.WriteCapable)
+	}
+
+	// 3. Publish private HTTP port -> returns one-time token + tokenUrl in direct POST response only.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-rw/vms/m_run/ports", strings.NewReader(`{"port":3000,"name":"web","protocol":"http","access":"private"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST publish = %d: %s", rec.Code, rec.Body.String())
+	}
+	var pubResp instabox.PublicPort
+	if err := json.Unmarshal(rec.Body.Bytes(), &pubResp); err != nil {
+		t.Fatalf("decode publish response: %v", err)
+	}
+	if pubResp.Token != "ibp_secret_one_time_1" || !strings.Contains(pubResp.TokenURL, "ibp_secret_one_time_1") {
+		t.Fatalf("expected one-time token and tokenUrl in POST response, got %+v", pubResp)
+	}
+
+	// 4. Rotate token -> returns new one-time secret in POST response.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-rw/vms/m_run/ports", strings.NewReader(`{"port":3000,"name":"web","protocol":"http","access":"private","rotateToken":true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST rotate = %d: %s", rec.Code, rec.Body.String())
+	}
+	var rotResp instabox.PublicPort
+	_ = json.Unmarshal(rec.Body.Bytes(), &rotResp)
+	if rotResp.Token != "ibp_secret_rotated_2" || !strings.Contains(rotResp.TokenURL, "ibp_secret_rotated_2") {
+		t.Fatalf("expected rotated secret in POST response, got %+v", rotResp)
+	}
+
+	// 5. Zero-Leak checks on GET /api/ports, GET machine ports, GET /api/activity, and SQLite snapshots.
+	for _, endpoint := range []string{"/api/ports", "/api/accounts/acc-rw/vms/m_run/ports", "/api/activity"} {
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, endpoint, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", endpoint, rec.Code)
+		}
+		bodyStr := rec.Body.String()
+		if strings.Contains(bodyStr, "ibp_secret_one_time_1") ||
+			strings.Contains(bodyStr, "ibp_secret_rotated_2") ||
+			strings.Contains(bodyStr, "ibp_should_never_pass_get") ||
+			strings.Contains(bodyStr, "tokenUrl") {
+			t.Fatalf("SECURITY VIOLATION: port token leaked in GET %s: %s", endpoint, bodyStr)
+		}
+	}
+
+	// Verify GET /api/ports enriched metadata.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ports", nil))
+	var portsResp struct {
+		Ports []portView `json:"ports"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &portsResp)
+	if len(portsResp.Ports) != 1 || portsResp.Ports[0].OrgName != "Production" ||
+		portsResp.Ports[0].MachineName != "api-vm" || !portsResp.Ports[0].CanWrite {
+		t.Fatalf("unexpected enriched ports response: %+v", portsResp.Ports)
+	}
+
+	// Verify SQLite snapshots contain zero tokens.
+	snapsDB, _ := st.ListSnapshots(ctx)
+	for _, s := range snapsDB {
+		if strings.Contains(s.PortsJSON, "ibp_secret") || strings.Contains(s.PortsJSON, "tokenUrl") {
+			t.Fatalf("SECURITY VIOLATION: port token stored in SQLite snapshot %s: %s", s.AccountID, s.PortsJSON)
+		}
+	}
+
+	// 6. Unpublish port -> 204 and clears cached port.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-rw/vms/m_run/ports/3000", nil))
+	if rec.Code != http.StatusNoContent || deleteCalls.Load() != 1 {
+		t.Fatalf("DELETE unpublish = %d (hits=%d): %s", rec.Code, deleteCalls.Load(), rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ports", nil))
+	portsResp.Ports = nil
+	_ = json.Unmarshal(rec.Body.Bytes(), &portsResp)
+	if len(portsResp.Ports) != 0 {
+		t.Fatalf("expected 0 ports after unpublish, got %+v", portsResp.Ports)
+	}
+}

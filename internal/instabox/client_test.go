@@ -216,3 +216,119 @@ func TestClientLifecycleIdempotencyForceStopAndErrors(t *testing.T) {
 		t.Fatalf("expected 401 expired_key, got %v", err)
 	}
 }
+
+func TestClientPortPublishingAndUnpublish(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines/m_1/ports":
+			_ = json.NewEncoder(w).Encode(PublicPortList{
+				Enabled: true,
+				Ports: []PublicPort{
+					{
+						ID:        "port_3000",
+						MachineID: "m_1",
+						Name:      "web",
+						Port:      3000,
+						Protocol:  "http",
+						Access:    "private",
+						URL:       "https://3000-m1.instabox.sh",
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/machines/m_1/ports":
+			var req PublishPortRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode publish request: %v", err)
+			}
+			if req.Port == 8080 && req.RotateToken {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(PublicPort{
+					ID:        "port_8080",
+					MachineID: "m_1",
+					Name:      req.Name,
+					Port:      8080,
+					Protocol:  "http",
+					Access:    "private",
+					URL:       "https://8080-m1.instabox.sh",
+					Token:     "ibp_rotated_secret",
+					TokenURL:  "https://8080-m1.instabox.sh?_token=ibp_rotated_secret",
+				})
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(PublicPort{
+				ID:        "port_3000",
+				MachineID: "m_1",
+				Name:      req.Name,
+				Port:      req.Port,
+				Protocol:  req.Protocol,
+				Access:    req.Access,
+				URL:       "https://3000-m1.instabox.sh",
+				Token:     "ibp_initial_secret",
+				TokenURL:  "https://3000-m1.instabox.sh?_token=ibp_initial_secret",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/machines/m_ro/ports":
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"code": "missing_scope", "message": "machines:write required"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/machines/m_conflict/ports":
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"code": "conflict", "message": "protocol cannot be changed"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/machines/m_quota/ports":
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"code": "port_limit", "message": "max 16 ports"},
+			})
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/machines/m_1/ports/3000":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "ibk_test")
+	ctx := context.Background()
+
+	list, err := c.ListMachinePorts(ctx, "m_1")
+	if err != nil || !list.Enabled || len(list.Ports) != 1 || list.Ports[0].Port != 3000 {
+		t.Fatalf("ListMachinePorts = (%+v, %v)", list, err)
+	}
+
+	created, err := c.PublishPort(ctx, "m_1", PublishPortRequest{
+		Port:     3000,
+		Name:     "web",
+		Protocol: "http",
+		Access:   "private",
+	})
+	if err != nil || created.Token != "ibp_initial_secret" || created.TokenURL == "" {
+		t.Fatalf("PublishPort create = (%+v, %v)", created, err)
+	}
+
+	rotated, err := c.PublishPort(ctx, "m_1", PublishPortRequest{
+		Port:        8080,
+		Name:        "api",
+		RotateToken: true,
+	})
+	if err != nil || rotated.Token != "ibp_rotated_secret" {
+		t.Fatalf("PublishPort rotate = (%+v, %v)", rotated, err)
+	}
+
+	var apiErr *APIError
+	if _, err := c.PublishPort(ctx, "m_ro", PublishPortRequest{Port: 3000}); !errors.As(err, &apiErr) || !apiErr.IsMissingScope() {
+		t.Fatalf("expected missing_scope 403, got %v", err)
+	}
+	if _, err := c.PublishPort(ctx, "m_conflict", PublishPortRequest{Port: 3000}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 conflict, got %v", err)
+	}
+	if _, err := c.PublishPort(ctx, "m_quota", PublishPortRequest{Port: 3000}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %v", err)
+	}
+
+	if err := c.UnpublishPort(ctx, "m_1", 3000); err != nil {
+		t.Fatalf("UnpublishPort error: %v", err)
+	}
+}

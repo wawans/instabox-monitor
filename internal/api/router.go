@@ -85,13 +85,16 @@ func (s *Server) registerRoutes(uiHandler http.Handler) {
 	s.mux.Handle("GET /api/activity", protect(http.HandlerFunc(s.handleListActivity)))
 	s.mux.Handle("GET /api/events", protect(http.HandlerFunc(s.handleSSE)))
 
-	// VM Detail & Lifecycle
+	// VM Detail, Lifecycle & Port Publishing
 	s.mux.Handle("GET /api/accounts/{accountId}/vms/{machineId}", protect(http.HandlerFunc(s.handleGetVM)))
 	s.mux.Handle("GET /api/accounts/{accountId}/vms/{machineId}/metrics", protect(http.HandlerFunc(s.handleGetVMMetrics)))
 	s.mux.Handle("GET /api/accounts/{accountId}/vms/{machineId}/disk", protect(http.HandlerFunc(s.handleGetVMDisk)))
 	s.mux.Handle("GET /api/accounts/{accountId}/vms/{machineId}/processes", protect(http.HandlerFunc(s.handleGetVMProcesses)))
 	s.mux.Handle("GET /api/accounts/{accountId}/vms/{machineId}/logs", protect(http.HandlerFunc(s.handleGetVMLogs)))
 	s.mux.Handle("POST /api/accounts/{accountId}/vms/{machineId}/actions/{action}", protect(http.HandlerFunc(s.handleVMAction)))
+	s.mux.Handle("GET /api/accounts/{accountId}/vms/{machineId}/ports", protect(http.HandlerFunc(s.handleListMachinePorts)))
+	s.mux.Handle("POST /api/accounts/{accountId}/vms/{machineId}/ports", protect(http.HandlerFunc(s.handlePublishPort)))
+	s.mux.Handle("DELETE /api/accounts/{accountId}/vms/{machineId}/ports/{port}", protect(http.HandlerFunc(s.handleUnpublishPort)))
 	s.mux.Handle("GET /api/accounts/{accountId}/operations/{opId}", protect(http.HandlerFunc(s.handleGetOperation)))
 
 	// Embedded Web UI fallback

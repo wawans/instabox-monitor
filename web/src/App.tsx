@@ -144,9 +144,15 @@ export default function App() {
           />
           <Route
             path="/accounts/:accountId/vms/:machineId"
-            element={<VMDetailPage activeOps={activeOps} onOperationStarted={handleOperationStarted} />}
+            element={
+              <VMDetailPage
+                activeOps={activeOps}
+                onOperationStarted={handleOperationStarted}
+                onFleetRefresh={loadFleet}
+              />
+            }
           />
-          <Route path="/ports" element={<PortsPage />} />
+          <Route path="/ports" element={<PortsPage fleet={fleet} onFleetRefresh={loadFleet} />} />
           <Route path="/accounts" element={<AccountsPage onAccountsChanged={loadFleet} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -4,6 +4,13 @@ Semua perubahan penting pada proyek **InstaBox Monitor** dicatat dalam file ini 
 
 ## [Unreleased]
 
+### Phase 6 — Port Publishing & Management
+- Menambahkan dukungan publish, edit (`name`/`access`), rotasi token privat (`rotateToken`), dan unpublish port pada REST client InstaBox (`ListMachinePorts`, `PublishPort`, `UnpublishPort`).
+- Menambahkan `UpsertCachedPort` dan `RemoveCachedPort` pada `poller.Manager` dengan kebijakan **Zero-Leak**: `token` dan `tokenUrl` selalu dihapus dari memory cache, SQLite `account_snapshots`, `activity_events`, maupun seluruh endpoint `GET`.
+- Menambahkan endpoint API internal `GET/POST /api/accounts/{accountId}/vms/{machineId}/ports` dan `DELETE /api/accounts/{accountId}/vms/{machineId}/ports/{port}`, memperkaya `GET /api/ports` (`orgId`, `orgName`, `canWrite`, `readOnly`), serta validasi port `1024..65535`, reserved port (`5901`/`6768`), `tcp + private`, dan adaptif `403 missing_scope`.
+- Meng-upgrade halaman **Ports (`/ports`)** dengan 4 kartu KPI, filter persisten di URL, chip akun, toggle tampilan **`List | Grouped by VM`**, mode responsif mobile/desktop, modal **`PublishPortModal`** (termasuk kuota `X/16` & **One-Time Private Token Reveal**), rotasi token, dan konfirmasi unpublish.
+- Meng-upgrade tab **Ports & Details** di **VM Detail** dengan tombol Publish Port, Edit, Rotate Token, Unpublish, dan tautan `Manage in Ports →`.
+
 ### Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide
 - Menambahkan multi-stage `Dockerfile` (`linux/amd64` & `linux/arm64`, distroless non-root ~24.9 MB, built-in `-healthcheck`) dan `.dockerignore`.
 - Menambahkan GitHub Actions workflow `.github/workflows/docker-publish.yml` untuk test otomatis serta build & publish image multi-arch ke `ghcr.io/wawans/instabox-monitor`.

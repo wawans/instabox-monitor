@@ -153,6 +153,28 @@ func (c *Client) ListPorts(ctx context.Context) (PublicPortList, error) {
 	return out, err
 }
 
+// ListMachinePorts calls GET /v1/machines/{id}/ports.
+func (c *Client) ListMachinePorts(ctx context.Context, machineID string) (PublicPortList, error) {
+	var out PublicPortList
+	path := fmt.Sprintf("/v1/machines/%s/ports", url.PathEscape(machineID))
+	err := c.doJSON(ctx, c.httpClient, http.MethodGet, path, nil, nil, &out)
+	return out, err
+}
+
+// PublishPort calls POST /v1/machines/{id}/ports to create or update a published port.
+func (c *Client) PublishPort(ctx context.Context, machineID string, req PublishPortRequest) (PublicPort, error) {
+	var out PublicPort
+	path := fmt.Sprintf("/v1/machines/%s/ports", url.PathEscape(machineID))
+	err := c.doJSON(ctx, c.httpClient, http.MethodPost, path, nil, req, &out)
+	return out, err
+}
+
+// UnpublishPort calls DELETE /v1/machines/{id}/ports/{port}.
+func (c *Client) UnpublishPort(ctx context.Context, machineID string, port int) error {
+	path := fmt.Sprintf("/v1/machines/%s/ports/%d", url.PathEscape(machineID), port)
+	return c.doJSON(ctx, c.httpClient, http.MethodDelete, path, nil, nil, nil)
+}
+
 // StartMachine calls POST /v1/machines/{id}/start with a fresh Idempotency-Key.
 func (c *Client) StartMachine(ctx context.Context, id string) (Operation, error) {
 	return c.lifecycleAction(ctx, id, "start", false)

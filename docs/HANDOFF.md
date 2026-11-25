@@ -5,13 +5,30 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide (SELESAI & merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 6 — Port Publishing & Management (SELESAI & merged ke `main`)
 - **Branch Aktif**: `main`
-- **Status Proyek**: Siap rilis & push ke GitHub (`git@github.com:wawans/instabox-monitor.git`) untuk memicu pipeline otomatis GHCR (`ghcr.io/wawans/instabox-monitor`).
+- **Status Proyek**: Fitur **Phase 6** manajemen Exposed Ports (Publish HTTP/TCP, Edit, Rotate Token + One-Time Token Reveal, Unpublish, Zero-Leak Secret Policy) terintegrasi penuh di `/ports` dan VM Detail, lolos seluruh Merge Gate, dan siap di-push ke `origin main` bila diperlukan.
 
 ---
 
 ## Riwayat Fase
+
+### Phase 6 — Port Publishing & Management
+- **Branch**: `feat/phase-6-port-publishing`
+- **Ringkasan Perubahan**:
+  - `internal/instabox/` (`types.go`, `client.go`, `client_test.go`): Menambahkan `PublishPortRequest`, field `PublicPort.Token`, metode `ListMachinePorts`, `PublishPort`, dan `UnpublishPort`, serta unit test `TestClientPortPublishingAndUnpublish` (`201`/`200`/`204`/`403`/`409`/`429`).
+  - `internal/poller/manager.go` & `poller_test.go`: Menambahkan `SanitizePublicPort`, `UpsertCachedPort`, `RemoveCachedPort`, serta sanitasi defensif di `pollOnce` dan `decodeSnapshot` sehingga secret `token` & `tokenUrl` tidak pernah tersimpan di cache memori maupun SQLite `account_snapshots`, plus unit test `TestPortCacheUpsertStripsTokenAndRemoveUpdatesSnapshot`.
+  - `internal/api/port_handlers.go`, `router.go`, `fleet_handlers.go`, `api_test.go`: Menambahkan endpoint `GET/POST /api/accounts/{accountId}/vms/{machineId}/ports` dan `DELETE /api/accounts/{accountId}/vms/{machineId}/ports/{port}`, memperkaya `GET /api/ports` (`orgId`, `orgName`, `canWrite`, `readOnly`), validasi port `1024..65535`, reserved port `5901`/`6768`, pembatasan `tcp + private` & `rotateToken + public`, adaptif `403 missing_scope`, kebijakan **Zero-Leak** (`token`/`tokenUrl` hanya dikembalikan one-time pada respons `POST` langsung), serta integration test `TestAppPortPublishRotateUnpublishAndZeroLeak`.
+  - `web/src/` (`PublishPortModal.tsx`, `PortsPage.tsx`, `VMDetailPage.tsx`, `App.tsx`, `lib/api.ts`, `types/instabox.ts`): Upgrade penuh menu **Ports (`/ports`)** dengan 4 kartu KPI, filter persisten di URL, chip akun, toggle `List | Grouped by VM`, Mobile Cards + Desktop Table, modal **Publish/Edit Port** (validasi `5901`/`6768`, kunci `Public` untuk TCP SNI, kuota `X/16`, peringatan VM offline `503`), **One-Time Private Token Reveal**, rotasi token, konfirmasi unpublish, serta pengelolaan port langsung pada tab **Ports & Details** di VM Detail.
+  - Dokumentasi: Pembaruan `docs/SPEC.md`, `docs/TASKS.md`, `docs/HANDOFF.md`, `CHANGELOG.md`, `README.md`, dan `walkthrough.md`.
+- **Verifikasi End-to-End**:
+  - `go vet ./...` & `go test -count=1 -race ./...`: 7/7 package PASS (0 error, 0 race).
+  - `pnpm --dir web typecheck && pnpm --dir web build`: `tsc --noEmit` Exit 0, Vite production build selesai dalam `3.12s`.
+  - Cross-compile statis (`CGO_ENABLED=0` dengan embedded `web/dist`): `linux/amd64` (`14M` stripped) & `linux/arm64` (`13M` stripped) PASS.
+  - `docker build -t instabox-monitor:local .`: Image distroless `24,991,917` bytes (~25.0 MB) PASS.
+  - Container smoke test (`APP_ENV=production`): `/api/health` `200 OK`, `/` embedded SPA `<title>InstaBox Monitor — Multi-Account VM Fleet</title>`, `-healthcheck` exit `0`, serta `PROD_LOG_FILES=0` (via bind-mount `/app/logs`).
+  - Audit keamanan Git (`git ls-files` & `git status --short`): 0 file kredensial/database/log ter-track.
+- **Next Steps**: Jalankan `git push origin main` bila siap menerbitkan image terbaru ke GHCR (`ghcr.io/wawans/instabox-monitor`).
 
 ### Phase 5 — Multi-Arch Docker, GitHub Workflow (GHCR) & Deployment User Guide
 - **Branch**: `build/phase-5-docker-ghcr-docs`

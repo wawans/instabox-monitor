@@ -319,12 +319,32 @@ export interface PublicPort {
   access: 'public' | 'private';
   address?: string;
   url: string;
+  token?: string;
   tokenUrl?: string;
   createdAt?: string;
+  expiresAt?: string | null;
   accountId?: string;
   accountName?: string;
+  orgId?: string;
+  orgName?: string;
   machineName?: string;
   machineState?: string;
+  canWrite?: boolean;
+  readOnly?: boolean;
+}
+
+export interface PublicPortListResponse {
+  enabled: boolean;
+  ports: PublicPort[];
+}
+
+export interface PublishPortPayload {
+  port: number;
+  name?: string;
+  protocol?: 'http' | 'tcp';
+  access?: 'public' | 'private';
+  rotateToken?: boolean;
+  machineName?: string;
 }
 
 export interface ActivityEvent {

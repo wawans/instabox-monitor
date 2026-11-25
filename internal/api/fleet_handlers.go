@@ -446,46 +446,6 @@ func matchesMachineSearch(vm instabox.Machine, q string) bool {
 	return false
 }
 
-func (s *Server) handleListPorts(w http.ResponseWriter, r *http.Request) {
-	accounts, err := s.store.ListAccounts(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	snaps := s.poller.SnapshotCopy()
-
-	type portView struct {
-		instabox.PublicPort
-		AccountID    string `json:"accountId"`
-		AccountName  string `json:"accountName"`
-		MachineName  string `json:"machineName"`
-		MachineState string `json:"machineState"`
-	}
-
-	out := make([]portView, 0)
-	for _, acc := range accounts {
-		snap, ok := snaps[acc.ID]
-		if !ok {
-			continue
-		}
-		vmByID := make(map[string]instabox.Machine, len(snap.Machines))
-		for _, vm := range snap.Machines {
-			vmByID[vm.ID] = vm
-		}
-		for _, p := range snap.Ports {
-			vm := vmByID[p.MachineID]
-			out = append(out, portView{
-				PublicPort:   p,
-				AccountID:    acc.ID,
-				AccountName:  acc.Name,
-				MachineName:  vm.Name,
-				MachineState: vm.State,
-			})
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ports": out})
-}
-
 func (s *Server) handleListActivity(w http.ResponseWriter, r *http.Request) {
 	events, err := s.store.ListActivityEvents(r.Context(), 50)
 	if err != nil {

@@ -221,6 +221,105 @@ func (m *Manager) SnapshotCopy() map[string]AccountCache {
 	return out
 }
 
+// SanitizePublicPort strips secret Token and TokenURL fields so private port secrets
+// are never held in memory caches, SQLite snapshots, or GET responses.
+func SanitizePublicPort(p instabox.PublicPort) instabox.PublicPort {
+	p.Token = ""
+	p.TokenURL = ""
+	return p
+}
+
+func sanitizePublicPorts(ports []instabox.PublicPort) []instabox.PublicPort {
+	if len(ports) == 0 {
+		return nil
+	}
+	out := make([]instabox.PublicPort, len(ports))
+	for i, p := range ports {
+		out[i] = SanitizePublicPort(p)
+	}
+	return out
+}
+
+// UpsertCachedPort inserts or replaces a machine port in the in-memory cache and SQLite snapshot
+// after stripping Token and TokenURL, then broadcasts fleet_updated.
+func (m *Manager) UpsertCachedPort(ctx context.Context, accountID string, p instabox.PublicPort) {
+	clean := SanitizePublicPort(p)
+	m.updateCachedPorts(ctx, accountID, func(ports []instabox.PublicPort) []instabox.PublicPort {
+		next := make([]instabox.PublicPort, len(ports))
+		copy(next, ports)
+		for i, existing := range next {
+			if (clean.MachineID != "" && existing.MachineID == clean.MachineID && existing.Port == clean.Port) ||
+				(clean.ID != "" && existing.ID == clean.ID) {
+				next[i] = clean
+				return next
+			}
+		}
+		return append(next, clean)
+	})
+}
+
+// RemoveCachedPort deletes a machine port from the in-memory cache and SQLite snapshot,
+// then broadcasts fleet_updated.
+func (m *Manager) RemoveCachedPort(ctx context.Context, accountID, machineID string, port int) {
+	m.updateCachedPorts(ctx, accountID, func(ports []instabox.PublicPort) []instabox.PublicPort {
+		next := make([]instabox.PublicPort, 0, len(ports))
+		for _, existing := range ports {
+			if existing.MachineID == machineID && existing.Port == port {
+				continue
+			}
+			next = append(next, existing)
+		}
+		return next
+	})
+}
+
+func (m *Manager) updateCachedPorts(ctx context.Context, accountID string, mutate func([]instabox.PublicPort) []instabox.PublicPort) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.mu.Lock()
+	c, ok := m.cache[accountID]
+	if !ok || c == nil {
+		c = &AccountCache{
+			AccountID:   accountID,
+			LiveMetrics: make(map[string]VMLiveTelemetry),
+			FetchedAt:   m.nowFn(),
+		}
+		m.cache[accountID] = c
+	}
+	if c.FetchedAt.IsZero() {
+		c.FetchedAt = m.nowFn()
+	}
+	c.Ports = sanitizePublicPorts(mutate(c.Ports))
+	snap := buildAccountSnapshot(accountID, c.Machines, c.Ports, c.LiveMetrics, c.FetchedAt, c.MetricsFetchedAt)
+	m.mu.Unlock()
+
+	_ = m.store.SaveSnapshot(ctx, snap)
+	m.broker.Publish(Event{Type: "fleet_updated", AccountID: accountID})
+}
+
+func buildAccountSnapshot(
+	accountID string,
+	machines []instabox.Machine,
+	ports []instabox.PublicPort,
+	metrics map[string]VMLiveTelemetry,
+	fetchedAt time.Time,
+	metricsFetchedAt *time.Time,
+) store.AccountSnapshot {
+	mBytes, _ := json.Marshal(machines)
+	pBytes, _ := json.Marshal(sanitizePublicPorts(ports))
+	metBytes, _ := json.Marshal(metrics)
+	return store.AccountSnapshot{
+		AccountID:        accountID,
+		MachinesJSON:     string(mBytes),
+		PortsJSON:        string(pBytes),
+		MetricsJSON:      string(metBytes),
+		FetchedAt:        fetchedAt,
+		MetricsFetchedAt: metricsFetchedAt,
+	}
+}
+
 // ClientForAccount decrypts an account's stored API key and returns a configured InstaBox client.
 func (m *Manager) ClientForAccount(ctx context.Context, accountID string) (*instabox.Client, store.Account, error) {
 	acc, err := m.store.GetAccount(ctx, accountID)
@@ -433,7 +532,7 @@ func (m *Manager) pollOnce(ctx context.Context, accountID string, client *instab
 	portsResp, portErr := client.ListPorts(ctx)
 	var ports []instabox.PublicPort
 	if portErr == nil {
-		ports = portsResp.Ports
+		ports = sanitizePublicPorts(portsResp.Ports)
 	} else {
 		m.log.Debug("list ports warning", "accountId", accountID, "error", portErr)
 	}
@@ -522,17 +621,7 @@ func (m *Manager) pollOnce(ctx context.Context, accountID string, client *instab
 	)
 
 	// Persist snapshot to SQLite for startup freshness checks.
-	mBytes, _ := json.Marshal(machines)
-	pBytes, _ := json.Marshal(ports)
-	metBytes, _ := json.Marshal(liveMetrics)
-	_ = m.store.SaveSnapshot(ctx, store.AccountSnapshot{
-		AccountID:        accountID,
-		MachinesJSON:     string(mBytes),
-		PortsJSON:        string(pBytes),
-		MetricsJSON:      string(metBytes),
-		FetchedAt:        now,
-		MetricsFetchedAt: metricsFetchedAt,
-	})
+	_ = m.store.SaveSnapshot(ctx, buildAccountSnapshot(accountID, machines, ports, liveMetrics, now, metricsFetchedAt))
 
 	m.mu.Lock()
 	m.cache[accountID] = &AccountCache{
@@ -721,6 +810,7 @@ func decodeSnapshot(s store.AccountSnapshot) *AccountCache {
 	}
 	_ = json.Unmarshal([]byte(s.MachinesJSON), &c.Machines)
 	_ = json.Unmarshal([]byte(s.PortsJSON), &c.Ports)
+	c.Ports = sanitizePublicPorts(c.Ports)
 	_ = json.Unmarshal([]byte(s.MetricsJSON), &c.LiveMetrics)
 	if c.LiveMetrics == nil {
 		c.LiveMetrics = make(map[string]VMLiveTelemetry)
