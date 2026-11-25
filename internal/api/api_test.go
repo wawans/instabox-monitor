@@ -541,3 +541,229 @@ func TestAppPortPublishRotateUnpublishAndZeroLeak(t *testing.T) {
 		t.Fatalf("expected 0 ports after unpublish, got %+v", portsResp.Ports)
 	}
 }
+
+func TestGetMachinePortsSyncsGlobalPortsCache(t *testing.T) {
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "ops"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/orgs":
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{Orgs: []instabox.Org{{ID: "org_a", Name: "Production"}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines":
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_run", Name: "api-vm", OrgID: "org_a", State: "running"},
+					{ID: "m_other", Name: "db-vm", OrgID: "org_a", State: "running"},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{
+				Enabled: true,
+				Ports: []instabox.PublicPort{
+					{ID: "port_4000", MachineID: "m_other", Name: "db", Port: 4000, Protocol: "tcp", Access: "public", Address: "4000-m_other.instabox.sh:443", URL: "tls://4000-m_other.instabox.sh:443"},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines/m_run/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{
+				Enabled: true,
+				Ports: []instabox.PublicPort{
+					{
+						ID:        "port_9090",
+						MachineID: "m_run",
+						Name:      "cli-prom",
+						Port:      9090,
+						Protocol:  "http",
+						Access:    "private",
+						URL:       "https://9090-mrun.instabox.sh",
+						Token:     "ibp_cli_secret_must_be_stripped",
+						TokenURL:  "https://9090-mrun.instabox.sh?_token=ibp_cli_secret_must_be_stripped",
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, pm, ciph := newTestServer(t, "")
+	ctx := context.Background()
+	enc, _ := ciph.Encrypt("ibk_rw_9999")
+	acc, _ := st.CreateAccount(ctx, store.Account{
+		ID: "acc-rw", Name: "Alpha", BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey("ibk_rw_9999"),
+		KeyHint: "ibk_••••9999", Enabled: true, Source: store.SourceUI,
+	})
+	pm.ReconcileAccount(ctx, acc.ID)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if snaps := pm.SnapshotCopy(); len(snaps[acc.ID].Machines) == 2 && len(snaps[acc.ID].Ports) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Calling machine ports endpoint fetches m_run:9090 (e.g., created via CLI) and syncs it into global cache.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/acc-rw/vms/m_run/ports", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET machine ports = %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "ibp_cli_secret_must_be_stripped") {
+		t.Fatalf("SECURITY VIOLATION: secret leaked from machine ports GET")
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ports", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/ports = %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "ibp_cli_secret_must_be_stripped") {
+		t.Fatalf("SECURITY VIOLATION: secret leaked into /api/ports cache")
+	}
+	var portsResp struct {
+		Ports []portView `json:"ports"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &portsResp)
+	if len(portsResp.Ports) != 2 {
+		t.Fatalf("expected 2 ports (db:4000 preserved + cli-prom:9090 synced), got %+v", portsResp.Ports)
+	}
+}
+
+func TestGetVMMetricsNormalizesSinceToRFC3339AndRejectsInvalid(t *testing.T) {
+	var upstreamHits atomic.Int32
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/machines/m_run/metrics":
+			upstreamHits.Add(1)
+			sinceQ := r.URL.Query().Get("since")
+			parsed, err := time.Parse(time.RFC3339, sinceQ)
+			if err != nil {
+				t.Errorf("upstream expected RFC 3339 since, got %q: %v", sinceQ, err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if ago := time.Since(parsed); ago < 59*time.Minute || ago > 61*time.Minute {
+				t.Errorf("upstream expected since ~1h ago, got %s (ago=%v)", sinceQ, ago)
+			}
+			_ = json.NewEncoder(w).Encode(instabox.MachineMetrics{
+				Metrics: []instabox.MachineMetric{{Timestamp: time.Now().UTC().Format(time.RFC3339), CPUUsedPct: 42}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, _, ciph := newTestServer(t, "")
+	ctx := context.Background()
+	enc, _ := ciph.Encrypt("ibk_rw_metrics")
+	_, _ = st.CreateAccount(ctx, store.Account{
+		ID: "acc-rw", Name: "Alpha", BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey("ibk_rw_metrics"),
+		KeyHint: "ibk_••••rics", Enabled: true, Source: store.SourceUI,
+	})
+
+	// 1. Valid duration query (?since=1h) normalizes to RFC 3339 before reaching InstaBox.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/acc-rw/vms/m_run/metrics?since=1h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET metrics?since=1h = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. Invalid since query returns 400 invalid_since locally without hitting upstream.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/acc-rw/vms/m_run/metrics?since=notaduration", nil))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_since") {
+		t.Fatalf("GET metrics?since=notaduration = %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("expected 1 upstream hit total, got %d", upstreamHits.Load())
+	}
+}
+
+func TestSyncAccountBlocksUntilDoneAndEnrichesFreeOrgVMCounts(t *testing.T) {
+	var phase atomic.Int32
+	mockAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "0wan"})
+		case "/v1/orgs":
+			// Real InstaBox /v1/orgs omits usage & limits.
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{
+				Orgs: []instabox.Org{{ID: "org_0wan", Name: "0wan", Tier: "free", Personal: true}},
+			})
+		case "/v1/orgs/org_0wan":
+			// Real InstaBox /v1/orgs/{id} reports usage.running=0 for FREE sandboxes!
+			_ = json.NewEncoder(w).Encode(instabox.Org{
+				ID: "org_0wan", Name: "0wan", Tier: "free", Personal: true,
+				Limits: &instabox.OrgLimits{MaxMachines: 5, FreeSandboxes: 5},
+				Usage:  &instabox.OrgUsage{Machines: 5, FreeMachines: 5, Running: 0},
+			})
+		case "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{})
+		case "/v1/machines":
+			if phase.Load() == 0 {
+				_ = json.NewEncoder(w).Encode(instabox.MachineList{Machines: []instabox.Machine{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_1", Name: "wans-1", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_2", Name: "wans-2", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_3", Name: "wans-3", OrgID: "org_0wan", State: "running", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_4", Name: "wans-4", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+					{ID: "m_5", Name: "wans-5", OrgID: "org_0wan", State: "suspended", Free: true, Storage: &instabox.Storage{SizeGiB: 20}},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockAPI.Close()
+
+	srv, st, pm, ciph := newTestServer(t, "")
+	ctx := context.Background()
+	enc, _ := ciph.Encrypt("ibk_0wan_sync")
+	acc, _ := st.CreateAccount(ctx, store.Account{
+		ID: "acc-0wan", Name: "wans", BaseURL: mockAPI.URL, APIKeyEnc: enc, APIKeyHash: ciph.HashAPIKey("ibk_0wan_sync"),
+		KeyHint: "ibk_••••sync", Enabled: true, Source: store.SourceUI,
+	})
+	pm.ReconcileAccount(ctx, acc.ID)
+
+	// Wait for initial sync (0 VMs), then flip upstream to 5 VMs (1 running free VM).
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-0wan/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial POST sync = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	phase.Store(1)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/accounts/acc-0wan/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST sync = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Immediately query GET /api/accounts with NO sleep: must already reflect 5 VMs, 1 running, 100 GiB disk, max 5!
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/accounts", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/accounts = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Accounts []accountResponse `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode /api/accounts: %v", err)
+	}
+	if len(resp.Accounts) != 1 || len(resp.Accounts[0].Orgs) != 1 {
+		t.Fatalf("expected 1 account with 1 org, got %+v", resp.Accounts)
+	}
+	org := resp.Accounts[0].Orgs[0]
+	if org.Usage == nil || org.Usage.Machines != 5 || org.Usage.Running != 1 || org.Usage.AllocatedDiskGiB != 100 {
+		t.Fatalf("expected live org usage machines=5 running=1 disk=100, got %+v", org.Usage)
+	}
+	if org.Limits == nil || org.Limits.MaxMachines != 5 {
+		t.Fatalf("expected org limits maxMachines=5, got %+v", org.Limits)
+	}
+}

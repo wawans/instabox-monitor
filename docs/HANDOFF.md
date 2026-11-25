@@ -5,13 +5,31 @@ Dokumen handoff hidup yang diperbarui setiap selesai 1 fase/task sebelum merge k
 ---
 
 ## Status Terkini
-- **Fase Terakhir Selesai**: Phase 6 — Port Publishing & Management (SELESAI & merged ke `main`)
+- **Fase Terakhir Selesai**: Phase 6.1 — Ports Refinement, Fleet UI Polish, RFC 3339 Metrics & Account Sync Fixes (SELESAI & merged ke `main`)
 - **Branch Aktif**: `main`
-- **Status Proyek**: Fitur **Phase 6** manajemen Exposed Ports (Publish HTTP/TCP, Edit, Rotate Token + One-Time Token Reveal, Unpublish, Zero-Leak Secret Policy) terintegrasi penuh di `/ports` dan VM Detail, lolos seluruh Merge Gate, dan siap di-push ke `origin main` bila diperlukan.
+- **Status Proyek**: Manajemen **Exposed Ports** (`/ports` & VM Detail), tampilan daftar VM **Fleet** tanpa `vm.orgName` (dropdown `All Orgs` tetap dipertahankan), normalisasi query metrik **RFC 3339** (`VM Detail` & `poller`), serta sinkronisasi jumlah VM live per-org pada halaman **Accounts** (`GetOrg` + `SyncAndWait` + SSE auto-refresh) selesai dan lolos seluruh Merge Gate, siap di-push ke `origin main` bila diperlukan.
 
 ---
 
 ## Riwayat Fase
+
+### Phase 6.1 — Ports Refinement, Fleet UI Polish, RFC 3339 Metrics & Account Sync Fixes
+- **Branch**: `feat/phase-6-ports-polish`
+- **Ringkasan Perubahan**:
+  - `internal/instabox/client.go`, `types.go`, `client_test.go`, `internal/poller/manager.go`, `poller_test.go`, `internal/api/account_handlers.go`, `fleet_handlers.go`, `vm_handlers.go`, `api_test.go`, `web/src/pages/AccountsPage.tsx`, `web/src/App.tsx`: Memperbaiki ketidaksinkronan `VMs: 0 Running: 0` di halaman **Accounts** dengan menambahkan `GetOrg` (`GET /v1/orgs/{id}`), field `FreeSandboxes`/`FreeMachines`, `enrichAccountOrgsFromSnapshot` (menghitung langsung VM free+paid & `allocatedDiskGiB` dari snapshot poller), blocking `SyncAndWait` pada `POST /api/accounts/{id}/sync` & `POST /api/fleet/sync`, serta SSE auto-refresh (`fleetGeneratedAt`) + animasi spinner Sync pada `AccountsPage`.
+  - `internal/instabox/client.go`, `client_test.go`, `internal/api/vm_handlers.go`, `internal/poller/poller_test.go`, `internal/api/api_test.go`: Menambahkan `instabox.NormalizeMetricsSince` untuk mengonversi durasi relatif (`2m`/`15m`/`1h`/`6h`/`24h`) ke timestamp **RFC 3339** UTC (clamp maks `23h59m30s`) serta validasi `400 invalid_since` guna memperbaiki error `since must be an RFC 3339 time` pada tab **VM Detail Metrics** sekaligus live telemetry **Background Poller**.
+  - `internal/poller/manager.go` & `internal/api/port_handlers.go`: Menambahkan `ReplaceMachineCachedPorts` dan integrasi di `handleListMachinePorts` untuk menyinkronkan live ports per-VM ke cache/SQLite tanpa membocorkan secret token dan tanpa SSE broadcast duplikat (`publicPortsEqual`).
+  - `web/src/components/PortEndpoint.tsx` & `PublishPortModal.tsx`: Menambahkan komponen endpoint khusus HTTP vs **TCP TLS SNI** (menghilangkan tautan `tls://` yang rusak, menampilkan `SNI` + tombol Copy **`openssl`** & **`psql`**), deteksi port duplikat & konflik protokol (`409`) di mode Create dengan tombol cepat *Switch to Edit*, serta batas `maxLength=100` pada nama port.
+  - `web/src/pages/PortsPage.tsx`, `VMDetailPage.tsx`, `FleetPage.tsx`, `App.tsx`: Menambahkan toggle opsional **`Show VMs with 0 ports`** di `Grouped by VM`, quick 1-klik **`Start VM` / `Wake VM`** di samping badge offline `503` (terhubung ke `activeOps`), toast feedback aksi port, kolom `Created` + sortable columns, reset error banner saat berpindah tab di VM Detail, serta menghapus tampilan `vm.orgName` dari daftar VM di **Fleet** (mobile card & desktop table) tanpa mengubah dropdown filter `All Orgs`.
+  - Dokumentasi: Pembaruan `docs/SPEC.md`, `docs/TASKS.md`, `docs/HANDOFF.md`, `CHANGELOG.md`, dan `walkthrough.md`.
+- **Verifikasi End-to-End**:
+  - `go vet ./...` & `go test -count=1 -race ./...`: 7/7 package PASS (0 error, 0 race).
+  - `pnpm --dir web typecheck && pnpm --dir web build`: `tsc --noEmit` Exit 0, Vite production build selesai dalam `4.52s` (`dist/assets/index-okvUuggN.js 884.41 kB`).
+  - Cross-compile statis (`CGO_ENABLED=0` dengan embedded `web/dist`): `linux/amd64` (`14M` stripped) & `linux/arm64` (`13M` stripped) PASS.
+  - `docker build -t instabox-monitor:local .`: Image distroless `25,038,389` bytes (~25.0 MB) PASS.
+  - Container smoke test (`APP_ENV=production`): `/api/health` `200 OK`, `/` embedded SPA `<title>InstaBox Monitor — Multi-Account VM Fleet</title>`, `-healthcheck` exit `0`, serta `PROD_LOG_FILES=0` (via bind-mount `/app/logs`).
+  - Audit keamanan Git (`git ls-files` & `git status --short`): 0 file kredensial/database/log ter-track.
+- **Next Steps**: Jalankan `git push origin main` bila siap menerbitkan image terbaru ke GHCR (`ghcr.io/wawans/instabox-monitor`).
 
 ### Phase 6 — Port Publishing & Management
 - **Branch**: `feat/phase-6-port-publishing`

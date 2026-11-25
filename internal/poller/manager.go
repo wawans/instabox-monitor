@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -59,6 +60,31 @@ type accountWorker struct {
 	cancel    context.CancelFunc
 	triggerCh chan struct{}
 	done      chan struct{}
+
+	waitMu  sync.Mutex
+	waiters []chan struct{}
+}
+
+func (w *accountWorker) addWaiter() chan struct{} {
+	ch := make(chan struct{})
+	w.waitMu.Lock()
+	w.waiters = append(w.waiters, ch)
+	w.waitMu.Unlock()
+	return ch
+}
+
+func (w *accountWorker) takeWaiters() []chan struct{} {
+	w.waitMu.Lock()
+	out := w.waiters
+	w.waiters = nil
+	w.waitMu.Unlock()
+	return out
+}
+
+func closeWaiters(waiters []chan struct{}) {
+	for _, ch := range waiters {
+		close(ch)
+	}
 }
 
 // Manager coordinates isolated per-account background pollers, SQLite snapshot persistence,
@@ -198,6 +224,44 @@ func (m *Manager) SyncNow(accountID string) {
 	}
 }
 
+// SyncAndWait triggers an immediate forced poll for one account (or all running workers if accountID == "")
+// and waits until the triggered poll cycle(s) complete or ctx is cancelled.
+func (m *Manager) SyncAndWait(ctx context.Context, accountID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.mu.RLock()
+	var waitChs []chan struct{}
+	if accountID != "" {
+		if w, ok := m.workers[accountID]; ok {
+			waitChs = append(waitChs, w.addWaiter())
+			select {
+			case w.triggerCh <- struct{}{}:
+			default:
+			}
+		}
+	} else {
+		for _, w := range m.workers {
+			waitChs = append(waitChs, w.addWaiter())
+			select {
+			case w.triggerCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, ch := range waitChs {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 // SnapshotCopy returns a safe copy of all cached account snapshots.
 func (m *Manager) SnapshotCopy() map[string]AccountCache {
 	m.mu.RLock()
@@ -271,6 +335,102 @@ func (m *Manager) RemoveCachedPort(ctx context.Context, accountID, machineID str
 		}
 		return next
 	})
+}
+
+// ReplaceMachineCachedPorts synchronizes all ports for a single machine into the account cache
+// and SQLite snapshot while keeping other machines' ports intact and stripping secrets.
+// Skips persistence and SSE broadcast if the machine's sanitized port list is unchanged.
+func (m *Manager) ReplaceMachineCachedPorts(ctx context.Context, accountID, machineID string, machinePorts []instabox.PublicPort) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sanitized := sanitizePublicPorts(machinePorts)
+	for i := range sanitized {
+		if sanitized[i].MachineID == "" {
+			sanitized[i].MachineID = machineID
+		}
+	}
+
+	m.mu.Lock()
+	c, ok := m.cache[accountID]
+	if !ok || c == nil {
+		if len(sanitized) == 0 {
+			m.mu.Unlock()
+			return
+		}
+		c = &AccountCache{
+			AccountID:   accountID,
+			LiveMetrics: make(map[string]VMLiveTelemetry),
+			FetchedAt:   m.nowFn(),
+		}
+		m.cache[accountID] = c
+	}
+	if c.FetchedAt.IsZero() {
+		c.FetchedAt = m.nowFn()
+	}
+
+	var existingMachine []instabox.PublicPort
+	otherPorts := make([]instabox.PublicPort, 0, len(c.Ports))
+	for _, p := range c.Ports {
+		if p.MachineID == machineID {
+			existingMachine = append(existingMachine, p)
+		} else {
+			otherPorts = append(otherPorts, p)
+		}
+	}
+
+	if publicPortsEqual(existingMachine, sanitized) {
+		m.mu.Unlock()
+		return
+	}
+
+	next := make([]instabox.PublicPort, 0, len(otherPorts)+len(sanitized))
+	next = append(next, otherPorts...)
+	next = append(next, sanitized...)
+	c.Ports = next
+	snap := buildAccountSnapshot(accountID, c.Machines, c.Ports, c.LiveMetrics, c.FetchedAt, c.MetricsFetchedAt)
+	m.mu.Unlock()
+
+	_ = m.store.SaveSnapshot(ctx, snap)
+	m.broker.Publish(Event{Type: "fleet_updated", AccountID: accountID})
+}
+
+func publicPortsEqual(a, b []instabox.PublicPort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	norm := func(in []instabox.PublicPort) []instabox.PublicPort {
+		out := sanitizePublicPorts(in)
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Port != out[j].Port {
+				return out[i].Port < out[j].Port
+			}
+			if out[i].Protocol != out[j].Protocol {
+				return out[i].Protocol < out[j].Protocol
+			}
+			return out[i].ID < out[j].ID
+		})
+		return out
+	}
+	na := norm(a)
+	nb := norm(b)
+	for i := range na {
+		if na[i].ID != nb[i].ID ||
+			na[i].MachineID != nb[i].MachineID ||
+			na[i].Name != nb[i].Name ||
+			na[i].Port != nb[i].Port ||
+			na[i].Protocol != nb[i].Protocol ||
+			na[i].Access != nb[i].Access ||
+			na[i].Address != nb[i].Address ||
+			na[i].URL != nb[i].URL ||
+			na[i].CreatedAt != nb[i].CreatedAt {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) updateCachedPorts(ctx context.Context, accountID string, mutate func([]instabox.PublicPort) []instabox.PublicPort) {
@@ -473,7 +633,12 @@ func (m *Manager) stopWorker(accountID string) {
 }
 
 func (m *Manager) runAccountLoop(ctx context.Context, w *accountWorker, accountID string, client *instabox.Client, initialDelay time.Duration) {
-	defer close(w.done)
+	var inFlightWaiters []chan struct{}
+	defer func() {
+		closeWaiters(inFlightWaiters)
+		closeWaiters(w.takeWaiters())
+		close(w.done)
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			m.log.Error("isolated account poller recovered from panic", "accountId", accountID, "panic", r)
@@ -500,11 +665,20 @@ func (m *Manager) runAccountLoop(ctx context.Context, w *accountWorker, accountI
 			select {
 			case <-ctx.Done():
 				return
+			case <-w.triggerCh:
+				forced = true
 			default:
 			}
 		}
 
+		inFlightWaiters = w.takeWaiters()
+		if len(inFlightWaiters) > 0 {
+			forced = true
+		}
+
 		delay, stopWorker := m.pollOnce(ctx, accountID, client, forced, &transientStreak)
+		closeWaiters(inFlightWaiters)
+		inFlightWaiters = nil
 		if stopWorker {
 			m.mu.Lock()
 			if cur, ok := m.workers[accountID]; ok && cur == w {
@@ -560,6 +734,14 @@ func (m *Manager) pollOnce(ctx context.Context, accountID string, client *instab
 			userEmail = me.Email
 		}
 		if orgs, orgErr := client.ListOrgs(ctx); orgErr == nil {
+			for i := range orgs {
+				if orgs[i].ID == "" {
+					continue
+				}
+				if detailed, dErr := client.GetOrg(ctx, orgs[i].ID); dErr == nil && detailed.ID != "" {
+					orgs[i] = detailed
+				}
+			}
 			if b, jErr := json.Marshal(orgs); jErr == nil {
 				orgsJSON = string(b)
 			}

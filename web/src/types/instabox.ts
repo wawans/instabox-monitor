@@ -6,6 +6,7 @@ export interface AuthStatus {
 
 export interface OrgLimits {
   alwaysOn?: boolean;
+  freeSandboxes?: number;
   maxDiskGiB: number;
   maxMachines: number;
   maxRunning: number;
@@ -17,6 +18,7 @@ export interface OrgLimits {
 export interface OrgUsage {
   allocatedDiskGiB: number;
   machines: number;
+  freeMachines?: number;
   running: number;
   snapshots: number;
   storedBytes?: number | null;

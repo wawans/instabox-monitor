@@ -60,6 +60,13 @@ func (c *Client) ListOrgs(ctx context.Context) ([]Org, error) {
 	return out.Orgs, err
 }
 
+// GetOrg calls GET /v1/orgs/{id} to fetch full org limits and usage.
+func (c *Client) GetOrg(ctx context.Context, id string) (Org, error) {
+	var out Org
+	err := c.doJSON(ctx, c.httpClient, http.MethodGet, "/v1/orgs/"+url.PathEscape(id), nil, nil, &out)
+	return out, err
+}
+
 // GetUsage calls GET /v1/usage (optionally scoped to orgID).
 func (c *Client) GetUsage(ctx context.Context, orgID string) (Usage, error) {
 	path := "/v1/usage"
@@ -103,14 +110,42 @@ func (c *Client) GetMachine(ctx context.Context, id string) (Machine, error) {
 	return out, err
 }
 
-// GetMachineMetrics calls GET /v1/machines/{id}/metrics?since=<since>.
+// NormalizeMetricsSince converts relative durations (e.g. "15m", "1h", "6h", "24h") into
+// RFC 3339 UTC timestamps required by GET /v1/machines/{id}/metrics, clamping windows at
+// 23h59m30s so "24h" remains inside InstaBox's 24-hour window despite clock skew or RTT.
+func NormalizeMetricsSince(since string, now time.Time) (string, error) {
+	trimmed := strings.TrimSpace(since)
+	if trimmed == "" {
+		return "", nil
+	}
+	if t, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	if dur, err := time.ParseDuration(trimmed); err == nil {
+		if dur <= 0 {
+			return "", fmt.Errorf("invalid since %q: duration must be positive", since)
+		}
+		const maxMetricsWindow = 24*time.Hour - 30*time.Second
+		if dur > maxMetricsWindow {
+			dur = maxMetricsWindow
+		}
+		return now.UTC().Add(-dur).Format(time.RFC3339), nil
+	}
+	return "", fmt.Errorf("invalid since %q: expected RFC 3339 timestamp or positive duration (e.g. 15m, 1h, 6h, 24h)", since)
+}
+
+// GetMachineMetrics calls GET /v1/machines/{id}/metrics?since=<rfc3339>.
 func (c *Client) GetMachineMetrics(ctx context.Context, id, since string) (MachineMetrics, error) {
+	resolved, err := NormalizeMetricsSince(since, time.Now().UTC())
+	if err != nil {
+		return MachineMetrics{}, err
+	}
 	path := "/v1/machines/" + url.PathEscape(id) + "/metrics"
-	if strings.TrimSpace(since) != "" {
-		path += "?since=" + url.QueryEscape(since)
+	if resolved != "" {
+		path += "?since=" + url.QueryEscape(resolved)
 	}
 	var out MachineMetrics
-	err := c.doJSON(ctx, c.httpClient, http.MethodGet, path, nil, nil, &out)
+	err = c.doJSON(ctx, c.httpClient, http.MethodGet, path, nil, nil, &out)
 	return out, err
 }
 

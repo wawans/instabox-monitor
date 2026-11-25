@@ -459,11 +459,6 @@ export function FleetPage({
                   <span className="rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                     {vm.accountName}
                   </span>
-                  {vm.orgName && (
-                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      {vm.orgName}
-                    </span>
-                  )}
                   <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     {vm.spec.vcpus}c / {formatMemMiB(vm.spec.memMiB)}
                     {diskSize > 0 ? ` / ${diskSize}G` : ''}
@@ -571,12 +566,6 @@ export function FleetPage({
                           <span>{vm.id}</span>
                           <span>·</span>
                           <span className="font-sans text-slate-600 dark:text-slate-300">{vm.accountName}</span>
-                          {vm.orgName && vm.orgName !== vm.accountName && (
-                            <>
-                              <span>/</span>
-                              <span className="font-sans">{vm.orgName}</span>
-                            </>
-                          )}
                         </div>
                       </td>
 

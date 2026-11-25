@@ -28,6 +28,12 @@ func TestClientMonitoringAndPagination(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Me{UserID: 1, Login: "wawans", Email: "w@example.com"})
 		case "/v1/orgs":
 			_ = json.NewEncoder(w).Encode(OrgList{Orgs: []Org{{ID: "org_1", Name: "Prod", Tier: "pro"}}})
+		case "/v1/orgs/org_1":
+			_ = json.NewEncoder(w).Encode(Org{
+				ID: "org_1", Name: "Prod", Tier: "pro",
+				Limits: &OrgLimits{MaxMachines: 10, FreeSandboxes: 5, MaxRunning: 5, MaxStoredGiB: 200},
+				Usage:  &OrgUsage{Machines: 3, FreeMachines: 1, Running: 2, AllocatedDiskGiB: 60},
+			})
 		case "/v1/machines":
 			cur := r.URL.Query().Get("cursor")
 			if cur == "" {
@@ -43,8 +49,12 @@ func TestClientMonitoringAndPagination(t *testing.T) {
 				})
 			}
 		case "/v1/machines/m_1/metrics":
-			if r.URL.Query().Get("since") != "1h" {
-				t.Errorf("expected since=1h, got %q", r.URL.Query().Get("since"))
+			sinceQ := r.URL.Query().Get("since")
+			parsed, parseErr := time.Parse(time.RFC3339, sinceQ)
+			if parseErr != nil {
+				t.Errorf("expected RFC 3339 since timestamp, got %q: %v", sinceQ, parseErr)
+			} else if ago := time.Since(parsed); ago < 59*time.Minute || ago > 61*time.Minute {
+				t.Errorf("expected since ~1h ago, got %s (ago=%v)", sinceQ, ago)
 			}
 			_ = json.NewEncoder(w).Encode(MachineMetrics{
 				Metrics: []MachineMetric{{Timestamp: "2026-11-24T10:00:00Z", CPUUsedPct: 33.5, MemUsed: 1024, MemTotal: 4096}},
@@ -88,6 +98,10 @@ func TestClientMonitoringAndPagination(t *testing.T) {
 	orgs, err := c.ListOrgs(ctx)
 	if err != nil || len(orgs) != 1 || orgs[0].Tier != "pro" {
 		t.Fatalf("ListOrgs = (%+v, %v)", orgs, err)
+	}
+	orgDetail, err := c.GetOrg(ctx, "org_1")
+	if err != nil || orgDetail.Limits == nil || orgDetail.Limits.MaxMachines != 10 || orgDetail.Usage == nil || orgDetail.Usage.AllocatedDiskGiB != 60 {
+		t.Fatalf("GetOrg = (%+v, %v)", orgDetail, err)
 	}
 	machines, err := c.ListMachines(ctx)
 	if err != nil || len(machines) != 2 || machines[0].ID != "m_1" || machines[1].ID != "m_2" {
@@ -330,5 +344,43 @@ func TestClientPortPublishingAndUnpublish(t *testing.T) {
 
 	if err := c.UnpublishPort(ctx, "m_1", 3000); err != nil {
 		t.Fatalf("UnpublishPort error: %v", err)
+	}
+}
+
+func TestNormalizeMetricsSince(t *testing.T) {
+	now := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty defaults to upstream default", in: "", want: ""},
+		{name: "15m duration", in: "15m", want: "2026-11-25T09:45:00Z"},
+		{name: "1h duration", in: "1h", want: "2026-11-25T09:00:00Z"},
+		{name: "24h clamped inside window", in: "24h", want: "2026-11-24T10:00:30Z"},
+		{name: "48h clamped inside window", in: "48h", want: "2026-11-24T10:00:30Z"},
+		{name: "rfc3339 with offset normalized to UTC", in: "2026-11-25T16:00:00+07:00", want: "2026-11-25T09:00:00Z"},
+		{name: "zero duration rejected", in: "0s", wantErr: true},
+		{name: "negative duration rejected", in: "-5m", wantErr: true},
+		{name: "garbage rejected", in: "not-a-time", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		got, err := NormalizeMetricsSince(tc.in, now)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s: expected error for %q, got %q", tc.name, tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: unexpected error for %q: %v", tc.name, tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: NormalizeMetricsSince(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
 	}
 }

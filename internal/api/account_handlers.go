@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"instabox-monitor/internal/config"
 	"instabox-monitor/internal/crypto"
 	"instabox-monitor/internal/instabox"
+	"instabox-monitor/internal/poller"
 	"instabox-monitor/internal/store"
 )
 
@@ -46,13 +48,15 @@ type accountResponse struct {
 }
 
 func (s *Server) toAccountResponse(a store.Account) accountResponse {
+	return s.toAccountResponseWithSnapshot(a, nil)
+}
+
+func (s *Server) toAccountResponseWithSnapshot(a store.Account, snap *poller.AccountCache) accountResponse {
 	var orgs []instabox.Org
 	if a.OrgsJSON != "" {
 		_ = json.Unmarshal([]byte(a.OrgsJSON), &orgs)
 	}
-	if orgs == nil {
-		orgs = []instabox.Org{}
-	}
+	orgs = enrichAccountOrgsFromSnapshot(orgs, snap)
 	return accountResponse{
 		ID:                      a.ID,
 		Slug:                    a.Slug,
@@ -78,6 +82,69 @@ func (s *Server) toAccountResponse(a store.Account) accountResponse {
 	}
 }
 
+func enrichAccountOrgsFromSnapshot(orgs []instabox.Org, snap *poller.AccountCache) []instabox.Org {
+	if orgs == nil {
+		orgs = []instabox.Org{}
+	}
+	if snap == nil {
+		return orgs
+	}
+
+	totalByOrg := make(map[string]int)
+	runningByOrg := make(map[string]int)
+	diskGiBByOrg := make(map[string]int)
+	for _, vm := range snap.Machines {
+		totalByOrg[vm.OrgID]++
+		if vm.State == "running" || vm.State == "starting" {
+			runningByOrg[vm.OrgID]++
+		}
+		disk := vm.Spec.PersistentDiskGiB
+		if vm.Storage != nil && vm.Storage.SizeGiB > 0 {
+			disk = vm.Storage.SizeGiB
+		}
+		diskGiBByOrg[vm.OrgID] += disk
+	}
+
+	out := make([]instabox.Org, len(orgs))
+	for i, org := range orgs {
+		out[i] = org
+		var usage instabox.OrgUsage
+		if org.Usage != nil {
+			usage = *org.Usage
+		}
+		usage.Machines = totalByOrg[org.ID]
+		usage.Running = runningByOrg[org.ID]
+		if usage.AllocatedDiskGiB == 0 && diskGiBByOrg[org.ID] > 0 {
+			usage.AllocatedDiskGiB = diskGiBByOrg[org.ID]
+		}
+		out[i].Usage = &usage
+	}
+
+	if len(out) == 0 && len(totalByOrg) > 0 {
+		ids := make([]string, 0, len(totalByOrg))
+		for id := range totalByOrg {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			name := id
+			if name == "" {
+				name = "Default"
+			}
+			out = append(out, instabox.Org{
+				ID:   id,
+				Name: name,
+				Usage: &instabox.OrgUsage{
+					Machines:         totalByOrg[id],
+					Running:          runningByOrg[id],
+					AllocatedDiskGiB: diskGiBByOrg[id],
+				},
+			})
+		}
+	}
+	return out
+}
+
 func validateBaseURL(raw string) (string, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
 	if trimmed == "" {
@@ -96,9 +163,14 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	snaps := s.poller.SnapshotCopy()
 	resp := make([]accountResponse, 0, len(accounts))
 	for _, a := range accounts {
-		resp = append(resp, s.toAccountResponse(a))
+		var snapPtr *poller.AccountCache
+		if snap, ok := snaps[a.ID]; ok {
+			snapPtr = &snap
+		}
+		resp = append(resp, s.toAccountResponseWithSnapshot(a, snapPtr))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"accounts": resp,
@@ -716,13 +788,17 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "account_disabled", "account is disabled; enable it before syncing")
 		return
 	}
-	s.poller.SyncNow(id)
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "accountId": id})
+	syncCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	_ = s.poller.SyncAndWait(syncCtx, id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accountId": id})
 }
 
-func (s *Server) handleSyncAll(w http.ResponseWriter, _ *http.Request) {
-	s.poller.SyncNow("")
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
+	syncCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	_ = s.poller.SyncAndWait(syncCtx, "")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 var _ context.Context

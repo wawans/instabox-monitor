@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"instabox-monitor/internal/instabox"
 	"instabox-monitor/internal/poller"
@@ -32,7 +33,9 @@ func (s *Server) handleGetVM(w http.ResponseWriter, r *http.Request) {
 	// Find ports for this machine from snapshot cache (or live fallback)
 	var vmPorts []instabox.PublicPort
 	snaps := s.poller.SnapshotCopy()
+	var snapPtr *poller.AccountCache
 	if snap, ok := snaps[accountID]; ok {
+		snapPtr = &snap
 		for _, p := range snap.Ports {
 			if p.MachineID == machineID {
 				vmPorts = append(vmPorts, p)
@@ -44,7 +47,7 @@ func (s *Server) handleGetVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account": s.toAccountResponse(acc),
+		"account": s.toAccountResponseWithSnapshot(acc, snapPtr),
 		"machine": vm,
 		"ports":   vmPorts,
 	})
@@ -57,13 +60,18 @@ func (s *Server) handleGetVMMetrics(w http.ResponseWriter, r *http.Request) {
 	if since == "" {
 		since = "1h"
 	}
+	resolvedSince, err := instabox.NormalizeMetricsSince(since, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_since", err.Error())
+		return
+	}
 
 	client, _, err := s.poller.ClientForAccount(r.Context(), accountID)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
 	}
-	metrics, err := client.GetMachineMetrics(r.Context(), machineID, since)
+	metrics, err := client.GetMachineMetrics(r.Context(), machineID, resolvedSince)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return

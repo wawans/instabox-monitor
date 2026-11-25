@@ -96,7 +96,12 @@ func (s *Server) handleGetFleet(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 
 	for _, acc := range accounts {
-		av := s.toAccountResponse(acc)
+		snap, hasSnap := snaps[acc.ID]
+		var snapPtr *poller.AccountCache
+		if hasSnap {
+			snapPtr = &snap
+		}
+		av := s.toAccountResponseWithSnapshot(acc, snapPtr)
 		accViews = append(accViews, av)
 
 		switch acc.LastSyncStatus {
@@ -121,7 +126,6 @@ func (s *Server) handleGetFleet(w http.ResponseWriter, r *http.Request) {
 			orgNames[o.ID] = o.Name
 		}
 
-		snap, hasSnap := snaps[acc.ID]
 		if !hasSnap {
 			continue
 		}

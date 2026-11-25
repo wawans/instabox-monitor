@@ -177,6 +177,12 @@ func TestPerAccountIsolationAutoDisable401AndNon401Resilience(t *testing.T) {
 		case "/v1/orgs":
 			_ = json.NewEncoder(w).Encode(instabox.OrgList{})
 		case "/v1/machines/m_ok/metrics":
+			sinceQ := r.URL.Query().Get("since")
+			if parsed, parseErr := time.Parse(time.RFC3339, sinceQ); parseErr != nil {
+				t.Errorf("expected RFC 3339 since timestamp from poller, got %q: %v", sinceQ, parseErr)
+			} else if ago := time.Since(parsed); ago < time.Minute || ago > 5*time.Minute {
+				t.Errorf("expected poller since ~2m ago, got %s (ago=%v)", sinceQ, ago)
+			}
 			_ = json.NewEncoder(w).Encode(instabox.MachineMetrics{
 				Metrics: []instabox.MachineMetric{{Timestamp: "2026-11-24T10:00:00Z", CPUUsedPct: 25, MemUsed: 512, MemTotal: 1024}},
 			})
@@ -347,5 +353,170 @@ func TestPortCacheUpsertStripsTokenAndRemoveUpdatesSnapshot(t *testing.T) {
 				t.Fatalf("expected 0 ports in SQLite after remove, got %+v", ports)
 			}
 		}
+	}
+}
+
+func TestReplaceMachineCachedPortsPreservesOtherVMsAndStripsTokens(t *testing.T) {
+	st, ciph := setupTestEnv(t)
+	ctx := context.Background()
+	createAcc(t, st, ciph, "acc-1", "Acct 1", "https://example.invalid", "ibk_1")
+
+	mgr := NewManager(config.Config{
+		PollIntervalSeconds:        10,
+		MetricsPollIntervalSeconds: 10,
+		AccountMaxAuthFailures:     3,
+	}, st, ciph, nil)
+
+	// Seed ports on m_1 and m_2.
+	mgr.UpsertCachedPort(ctx, "acc-1", instabox.PublicPort{
+		ID: "port_3000", MachineID: "m_1", Name: "old", Port: 3000, Protocol: "http", Access: "public", URL: "https://3000-m1.instabox.sh",
+	})
+	mgr.UpsertCachedPort(ctx, "acc-1", instabox.PublicPort{
+		ID: "port_8080", MachineID: "m_2", Name: "other-vm", Port: 8080, Protocol: "http", Access: "public", URL: "https://8080-m2.instabox.sh",
+	})
+
+	ch, unsub := mgr.Broker().Subscribe()
+	defer unsub()
+
+	livePorts := []instabox.PublicPort{
+		{ID: "port_3000", MachineID: "m_1", Name: "web-live", Port: 3000, Protocol: "http", Access: "public", URL: "https://3000-m1.instabox.sh"},
+		{ID: "port_5173", MachineID: "", Name: "vite", Port: 5173, Protocol: "http", Access: "private", URL: "https://5173-m1.instabox.sh", Token: "ibp_live_secret", TokenURL: "https://5173-m1.instabox.sh?_token=ibp_live_secret"},
+	}
+	mgr.ReplaceMachineCachedPorts(ctx, "acc-1", "m_1", livePorts)
+
+	// Should publish 1 fleet_updated event on change.
+	select {
+	case <-ch:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected fleet_updated SSE event after ReplaceMachineCachedPorts")
+	}
+
+	snap := mgr.SnapshotCopy()["acc-1"]
+	if len(snap.Ports) != 3 {
+		t.Fatalf("expected 3 total ports (2 on m_1, 1 on m_2), got %+v", snap.Ports)
+	}
+	var m2Found, m1ViteFound bool
+	for _, p := range snap.Ports {
+		if p.Token != "" || p.TokenURL != "" {
+			t.Fatalf("SECURITY VIOLATION: token leaked in cached port %+v", p)
+		}
+		if p.MachineID == "m_2" && p.Port == 8080 {
+			m2Found = true
+		}
+		if p.MachineID == "m_1" && p.Port == 5173 && p.Name == "vite" {
+			m1ViteFound = true
+		}
+	}
+	if !m2Found || !m1ViteFound {
+		t.Fatalf("expected m_2:8080 preserved and m_1:5173 added, got %+v", snap.Ports)
+	}
+
+	// Verify SQLite snapshot persisted the sync cleanly with 0 secrets.
+	dbSnaps, err := st.ListSnapshots(ctx)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	for _, s := range dbSnaps {
+		if s.AccountID == "acc-1" {
+			var ports []instabox.PublicPort
+			if err := json.Unmarshal([]byte(s.PortsJSON), &ports); err != nil {
+				t.Fatalf("unmarshal PortsJSON: %v", err)
+			}
+			if len(ports) != 3 {
+				t.Fatalf("expected 3 ports in SQLite snapshot, got %+v", ports)
+			}
+		}
+	}
+
+	// Repeating identical live ports must NOT emit another SSE broadcast.
+	mgr.ReplaceMachineCachedPorts(ctx, "acc-1", "m_1", livePorts)
+	select {
+	case msg := <-ch:
+		t.Fatalf("expected no SSE event when ports are unchanged, got %s", string(msg))
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestSyncAndWaitCompletesFreshPollAndEnrichesOrgDetails(t *testing.T) {
+	st, ciph := setupTestEnv(t)
+	ctx := context.Background()
+
+	var phase atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/machines":
+			if phase.Load() == 0 {
+				_ = json.NewEncoder(w).Encode(instabox.MachineList{Machines: []instabox.Machine{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(instabox.MachineList{
+				Machines: []instabox.Machine{
+					{ID: "m_1", Name: "wans-1", OrgID: "org_free", State: "running", Free: true},
+					{ID: "m_2", Name: "wans-2", OrgID: "org_free", State: "suspended", Free: true},
+				},
+			})
+		case "/v1/ports":
+			_ = json.NewEncoder(w).Encode(instabox.PublicPortList{})
+		case "/v1/me":
+			_ = json.NewEncoder(w).Encode(instabox.Me{Login: "0wan"})
+		case "/v1/orgs":
+			// Mirror real InstaBox behavior: GET /v1/orgs omits limits & usage.
+			_ = json.NewEncoder(w).Encode(instabox.OrgList{
+				Orgs: []instabox.Org{{ID: "org_free", Name: "0wan", Tier: "free", Personal: true}},
+			})
+		case "/v1/orgs/org_free":
+			_ = json.NewEncoder(w).Encode(instabox.Org{
+				ID: "org_free", Name: "0wan", Tier: "free", Personal: true,
+				Limits: &instabox.OrgLimits{MaxMachines: 5, FreeSandboxes: 5},
+				Usage:  &instabox.OrgUsage{Machines: 2, FreeMachines: 2, Running: 0},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	createAcc(t, st, ciph, "acc-sync", "wans", srv.URL, "ibk_sync_test")
+
+	mgr := NewManager(config.Config{
+		PollIntervalSeconds:        300,
+		MetricsPollIntervalSeconds: 0,
+		AccountMaxAuthFailures:     3,
+	}, st, ciph, nil)
+	mgr.pollInterval = 5 * time.Minute
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Wait for initial cold-start poll (0 machines).
+	if err := mgr.SyncAndWait(ctx, "acc-sync"); err != nil {
+		t.Fatalf("initial SyncAndWait: %v", err)
+	}
+
+	// Switch upstream to return 2 machines and invoke SyncAndWait: cache must be updated IMMEDIATELY when it returns.
+	phase.Store(1)
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := mgr.SyncAndWait(waitCtx, "acc-sync"); err != nil {
+		t.Fatalf("SyncAndWait after upstream change: %v", err)
+	}
+
+	snap := mgr.SnapshotCopy()["acc-sync"]
+	if len(snap.Machines) != 2 {
+		t.Fatalf("expected 2 machines immediately after SyncAndWait, got %d", len(snap.Machines))
+	}
+
+	acc, err := st.GetAccount(ctx, "acc-sync")
+	if err != nil {
+		t.Fatalf("GetAccount: %v", err)
+	}
+	var orgs []instabox.Org
+	if err := json.Unmarshal([]byte(acc.OrgsJSON), &orgs); err != nil {
+		t.Fatalf("unmarshal OrgsJSON: %v", err)
+	}
+	if len(orgs) != 1 || orgs[0].Limits == nil || orgs[0].Limits.MaxMachines != 5 {
+		t.Fatalf("expected GetOrg limits persisted in OrgsJSON, got %+v", orgs)
 	}
 }
